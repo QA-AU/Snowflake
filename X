@@ -1,1 +1,92 @@
-X
+-- 1. Context: role, warehouse, database & schema
+USE ROLE SNOWFLAKE_LEARNING_ROLE;
+USE WAREHOUSE SNOWFLAKE_LEARNING_WH;
+USE DATABASE SNOWFLAKE_LEARNING_DB;
+SET schema_name = CONCAT(current_user(), '_LOAD_SAMPLE_DATA_FROM_S3');
+USE SCHEMA IDENTIFIER($schema_name);
+
+-- 2. Create + populate your Input_S3 table
+CREATE OR REPLACE TABLE Input_S3 (
+  output_table STRING,
+  URL          STRING,
+  Type         STRING
+);
+
+INSERT INTO Input_S3 (output_table, URL, Type) VALUES
+  ('NYC',      's3://proteingym/DMS_substitutions.parquet',      'parquet'),
+  ('MENU',      's3://sfquickstarts/tastybytes/raw_pos/menu/',      'parquet'),
+  ('ORDERS',    's3://sfquickstarts/tastybytes/raw_pos/orders/',    'parquet'),
+  ('CUSTOMERS', 's3://sfquickstarts/tastybytes/raw_pos/customers/', 'parquet');
+
+-- 3. Ensure your Parquet file format exists
+CREATE OR REPLACE FILE FORMAT parquet_format
+  TYPE = PARQUET
+  COMPRESSION = AUTO;
+
+-- 4. Create the loader procedure using a cursor‐based FOR loop
+CREATE OR REPLACE PROCEDURE load_from_input_s3()
+  RETURNS STRING
+  LANGUAGE SQL
+  EXECUTE AS CALLER
+AS
+$$
+DECLARE
+  -- declare a cursor over the rows you need to process
+  c1 CURSOR FOR
+    SELECT output_table, URL
+      FROM Input_S3
+     WHERE Type = 'parquet';
+BEGIN
+  -- iterate over each row in the cursor
+  FOR rec IN c1 DO
+    -- 4a. create a stage for this URL
+    EXECUTE IMMEDIATE
+      'CREATE OR REPLACE STAGE "' || rec.output_table || '_STG" '
+      || 'URL=''' || rec.URL || ''' '
+      || 'FILE_FORMAT=(FORMAT_NAME=parquet_format)';
+
+    -- 4b. create the target table
+    EXECUTE IMMEDIATE
+      'CREATE OR REPLACE TABLE "' || rec.output_table || '" '
+      || '(data VARIANT, source_file STRING)';
+
+    -- 4c. load the Parquet into the table
+    EXECUTE IMMEDIATE
+      'COPY INTO "' || rec.output_table || '" (data, source_file) '
+      || 'FROM (SELECT $1, METADATA$FILENAME '
+      || '      FROM @"' || rec.output_table || '_STG" '
+      || '           (FILE_FORMAT=>''parquet_format'')) '
+      || 'ON_ERROR=''CONTINUE''';
+  END FOR;
+
+  RETURN 'LOAD COMPLETED';
+END;
+$$;
+
+-- 5. Run it
+CALL load_from_input_s3();
+
+
+-- Step 7: Create a table function that returns each table’s loaded row coun
+CREATE OR REPLACE FUNCTION get_load_counts()
+  RETURNS TABLE (table_name TEXT, row_count DECIMAL(38,0))
+  LANGUAGE SQL
+  AS '\n
+    SELECT
+      s.output_table AS table_name,
+      t.row_count    AS row_count
+    FROM input_s3 AS s
+    JOIN INFORMATION_SCHEMA.TABLES AS t
+      ON t.table_schema = CURRENT_SCHEMA()
+     AND t.table_name   = s.output_table
+    WHERE s.type = ''parquet''
+  \n';
+
+-- Step 8: Invoke the function to see counts
+SELECT *
+FROM TABLE(get_load_counts());
+
+
+
+
+
