@@ -14,6 +14,8 @@ LIMIT 5;
 
 
 
+
+
 -- === INSERT: source new vs pre-merge dim (time travel) vs post-merge dim ===
 WITH pick_pk AS (
   SELECT pk1, pk2
