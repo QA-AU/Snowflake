@@ -60,3 +60,13 @@ ORDER BY TABLE_NAME;
 DROP TABLE IF EXISTS QA_TMP_ACCESS_REPORT;
 DROP TABLE IF EXISTS QA_TMP_GRANTS;
 DROP TABLE IF EXISTS QA_TMP_TABLES;
+
+| Privilege  | Read / Write Category   | What it allows                   |
+| ---------- | ----------------------- | -------------------------------- |
+| SELECT     | **Read**                | Query rows                       |
+| INSERT     | **Write**               | Add new rows                     |
+| UPDATE     | **Write**               | Modify existing rows             |
+| DELETE     | **Write**               | Remove rows                      |
+| TRUNCATE   | **Write** (admin-level) | Remove all rows quickly          |
+| REFERENCES | Neither (constraint)    | Create foreign key relationships |
+
