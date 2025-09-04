@@ -2,6 +2,54 @@ SCD2_Meta_Driven_v2.sql
 
 --- Test Data given in the end --------
 
+CREATE OR REPLACE TABLE qa_scd2_config (
+    src_db         STRING,
+    src_schema     STRING,
+    src_table      STRING,
+    tgt_db         STRING,
+    tgt_schema     STRING,
+    tgt_table      STRING,
+    pk_cols        STRING,
+    business_cols  STRING
+);
+
+
+INSERT INTO qa_scd2_config VALUES (
+    'STAGING_DB', 
+    'STG', 
+    'CUSTOMER_STG',
+    'DW_DB',
+    'DIM',
+    'CUSTOMER_DIM',
+    'CUSTOMER_ID, REGION_ID',
+    'NAME, ADDRESS'
+);
+
+-- Assign from config row
+SET (src_db, src_schema, src_table,
+     tgt_db, tgt_schema, tgt_table,
+     pk_cols, business_cols) = (
+    SELECT src_db, src_schema, src_table,
+           tgt_db, tgt_schema, tgt_table,
+           pk_cols, business_cols
+    FROM qa_scd2_config
+    LIMIT 1
+);
+
+
+SELECT $src_db   AS src_db,
+       $src_schema AS src_schema,
+       $src_table  AS src_table,
+       $tgt_db   AS tgt_db,
+       $tgt_schema AS tgt_schema,
+       $tgt_table  AS tgt_table,
+       $pk_cols    AS pk_cols,
+       $business_cols AS business_cols;
+
+
+
+
+
 -- ===========================================================
 -- Step 0: Define parameters
 -- ===========================================================
