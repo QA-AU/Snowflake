@@ -1,3 +1,5 @@
+# WORKING VERSION 
+
 from snowflake.snowpark import Session
 import re
 
