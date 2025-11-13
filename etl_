@@ -1,4 +1,4 @@
-etl_maping_sql_v2.py
+Ignore 
 
 from snowflake.snowpark import Session
 import re
