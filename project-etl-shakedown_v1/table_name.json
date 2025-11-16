@@ -1,0 +1,110 @@
+{
+    "version": "1.0",
+  
+    "table_fqn": "CORE.SALES.ORDER_DIM",
+  
+    "table": {
+  
+      "bk_columns": ["ORDER_ID"],
+  
+      "pk_columns": ["SK_ORDER_ID"],
+  
+      "scd2_required_columns": [
+        "SK_ORDER_ID",
+        "ORDER_ID",
+        "start_dt",
+        "end_dt",
+        "is_active",
+        "business_date"
+      ],
+  
+      "business_date_column": "business_date",
+  
+      "scd2_change_columns": [
+        "STATUS",
+        "AMOUNT",
+        "CUSTOMER_ID"
+      ],
+  
+      "etl_batch_columns": [
+        "batch_id",
+        "load_ts"
+      ],
+  
+      "allowed_values": {
+        "STATUS": ["OPEN", "CLOSED", "CANCELLED", null]
+      },
+  
+      "whitespace_columns": [
+        "CUSTOMER_NAME",
+        "PRODUCT_DESC"
+      ],
+  
+      "numeric_ranges": {
+        "AMOUNT": { "min": 0, "max": 999999.99 },
+        "QUANTITY": { "min": 1, "max": 5000 }
+      },
+  
+      "duplicate_by_bk": ["ORDER_ID"],
+  
+      "duplicate_by_bk_scd2": [
+        "ORDER_ID",
+        "start_dt",
+        "end_dt"
+      ],
+  
+      "fk_relations": [
+        {
+          "child_column": "CUSTOMER_ID",
+          "parent_table": "CORE.CUSTOMER_DIM",
+          "parent_column": "SK_CUSTOMER_ID"
+        },
+        {
+          "child_column": "PRODUCT_ID",
+          "parent_table": "CORE.PRODUCT_DIM",
+          "parent_column": "SK_PRODUCT_ID"
+        }
+      ],
+  
+      "orphan_checks": [
+        {
+          "fact_table": "CORE.SALES_FACT",
+          "fact_column": "ORDER_ID",
+          "dim_table": "CORE.SALES.ORDER_DIM",
+          "dim_column": "ORDER_ID"
+        }
+      ]
+    },
+  
+    "tests_to_run": [
+      "BK_NOT_NULL",
+      "PK_NOT_NULL",
+      "SCD2_COLS_NOT_NULL",
+      "SK_UNIQUENESS",
+      "NO_FUTURE_DATES",
+      "ETL_BATCH_COLS_NOT_NULL",
+  
+      "SCD2_START_DATE_VALID",
+      "SCD2_END_DATE_VALID",
+      "SCD2_ONLY_ONE_ACTIVE",
+      "SCD2_CHANGE_DETECTION",
+      "SCD2_EFFECTIVE_SEQUENCE",
+      "SCD2_SURROGATE_REUSE",
+  
+      "BUSINESS_DATE_MAX_MATCH",
+      "INSERT_COUNT",
+      "UPDATE_COUNT",
+      "DELETE_COUNT",
+  
+      "DUPLICATE_ROWS_BK",
+      "DUPLICATE_ROWS_BK_SCD2",
+  
+      "COL_ALLOWED_VALUES",
+      "COL_WHITESPACE_CLEAN",
+      "COL_RANGE_VALIDATION",
+  
+      "FK_RELATION_CHECK",
+      "ORPHAN_RECORDS_CHECK"
+    ]
+  }
+  

@@ -1,0 +1,34 @@
+Framework is Now:
+=========================================================
+
+✔ Metadata-driven
+✔ Auto-discovering
+✔ Schema-evolution enabled
+✔ Separate modules
+✔ Snowflake-Worksheet compatible
+✔ QA results stored in STG.QA_SHAKEDOWN_RESULTS
+
+files in package: 
+
+project/
+│
+├── metadata_loader.py
+├── auto_runner.py
+├── main_caller.py
+│
+├── engine/
+│    ├── helpers.py               # PART 1
+│    ├── tests_structural.py      # PART 2A
+│    ├── tests_scd2_temporal.py   # PART 2B (merged with Part 2)
+│    ├── tests_business.py        # PART 3A
+│    ├── tests_duplicates.py      # PART 3A
+│    ├── tests_quality.py         # PART 3B
+│    ├── tests_relational.py      # PART 3B
+│    ├── registry.py              # All TEST_REGISTRY here
+│    └── orchestrator.py          # PART 4
+│
+└── test_engine.py                # Only imports + orchestrator wrapper
+
+
+
+PUT file://ORDER_DIM.json @temp_config_stage;
