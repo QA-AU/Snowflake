@@ -1,8 +1,9 @@
-# etl_maping_sql_v2.py
-# GENERATE SQL from mapping info, store them, and validate source vs target
-
+from snowflake.snowpark.context import get_active_session
 from snowflake.snowpark import Session
 import re
+
+# Get the active Snowpark session for this worksheet
+session = get_active_session()
 
 # ===================== Configuration =========================================
 TABLE_META = {
@@ -108,7 +109,6 @@ def _apply_alias_token(expr, alias, table):
 
 
 def _combine_filters(*parts):
-    """Return a single SQL WHERE string combined with ANDs, with parentheses around each non-empty part."""
     toks = [p.strip() for p in parts if p and str(p).strip()]
     if not toks:
         return ""
@@ -116,10 +116,6 @@ def _combine_filters(*parts):
 
 
 def _resolve_date_filter(meta):
-    """
-    Return the raw date_filter string from TABLE_META (no token substitution).
-    If date_filter is missing/blank, returns "".
-    """
     return (meta.get("date_filter") or "").strip()
 
 
@@ -164,11 +160,6 @@ def _debug_on(meta):
 
 
 def _qa_table_fqn(meta=None):
-    """
-    Build the fully qualified name for the QA/mapping table based on TABLE_META.
-    Default: <qa_db_name or source_db_name>.<qa_schema_name>.<qa_table_name>
-    If qa_db_name is None, db part comes from source_db_name (or may be omitted).
-    """
     if meta is None:
         meta = TABLE_META
 
@@ -184,13 +175,8 @@ def _qa_table_fqn(meta=None):
 
 def _inject_order_date(sql, order_date_value):
     """
-    Replace the token 'order_date' in the SQL text with the supplied
+    Replace token 'order_date' in the SQL text with the supplied
     string literal value, quoted and escaped.
-
-    Example:
-      sql:  "... where order_date between XX.START_DT and XX.END_DT"
-      val:  "2024-06-30"
-      ->    "... where '2024-06-30' between XX.START_DT and XX.END_DT"
     """
     if not sql or order_date_value is None:
         return sql
@@ -219,7 +205,7 @@ def build_source_sql(meta, col):
     tdt = col.get("target_data_type")
     tgt_schema = col["target_schema_name"]
     tgt_table = col["target_table_name"]
-    out_name = col.get("target_column_name") or c   # output column name
+    out_name = col.get("target_column_name") or c
 
     fqn = _path(db, schema, tbl) + (f" {alias}" if alias else "")
     if debug:
@@ -261,10 +247,7 @@ def build_source_sql(meta, col):
     if debug:
         print(f"[DEBUG] select_clause -> {select_clause}")
 
-    # Use raw date_filter as-is (contains 'order_date' token and XX.* tokens)
     date_flt = _resolve_date_filter(meta)
-
-    # WHERE: combine source filter + date_filter
     where_combined = _combine_filters(src_flt, date_flt)
     if debug and where_combined:
         print(f"[DEBUG] where_clause -> {where_combined}")
@@ -300,10 +283,7 @@ def build_target_sql(meta, col):
     if debug:
         print(f"[DEBUG] select_clause (target) -> {select_clause}")
 
-    # Use raw date_filter as-is (contains 'order_date' token and XX.* tokens)
     date_flt = _resolve_date_filter(meta)
-
-    # WHERE: combine target filter + date_filter
     where_combined = _combine_filters(tgt_flt, date_flt)
     if debug and where_combined:
         print(f"[DEBUG] where_clause (target) -> {where_combined}")
@@ -315,14 +295,13 @@ def build_target_sql(meta, col):
 
 
 # --------------------------- Generator --------------------------------------
-def main_generate(session):
+def main_generate(session: Session):
     """
     Generate mapping SQL into the QA/mapping table and return its contents.
     Location is driven by TABLE_META (qa_db_name, qa_schema_name, qa_table_name).
     """
     qa_table = _qa_table_fqn()
 
-    # All required columns are created here; no ALTER TABLE is used later.
     session.sql(f"""
         CREATE OR REPLACE TRANSIENT TABLE {qa_table} (
             ROW_ID            NUMBER AUTOINCREMENT START 1 INCREMENT 1,
@@ -355,14 +334,12 @@ def main_generate(session):
 
 
 # --------------------------- Validator --------------------------------------
-def prepare_validation_sqls(session, table_fqn=""):
+def prepare_validation_sqls(session: Session, table_fqn: str = ""):
     """
     Generate and store COUNT_SQL and DIFF_SQL per row.
       - COUNT_SQL: count of (SQL_TEXT) UNION ALL count of (TARGET_TABLE_SQL)
       - DIFF_SQL : count of (SQL_TEXT MINUS TARGET_TABLE_SQL)
     Resets prior results/errors.
-
-    If table_fqn is empty, uses TABLE_META (qa_* settings).
     """
     if not table_fqn:
         table_fqn = _qa_table_fqn()
@@ -415,19 +392,15 @@ def prepare_validation_sqls(session, table_fqn=""):
         """).collect()
 
 
-def run_validation_sqls(session, table_fqn="", order_date_value=None):
+def run_validation_sqls(session: Session, table_fqn: str = "", order_date_value=None):
     """
     Execute the prepared SQLs per row and store results.
       - COUNT_RESULT_JSON: {"SRC": n1, "TGT": n2}
       - DIFF_RESULT: rows in SRC but not in TGT
       - COUNT_ERROR / DIFF_ERROR: error message if SQL fails
 
-    Execution continues even if some rows fail.
-    If table_fqn is empty, uses TABLE_META (qa_* settings).
-
     order_date_value: optional string literal to substitute for the token
                       'order_date' in COUNT_SQL and DIFF_SQL at execution time.
-                      If None, the query will still contain the token 'order_date'.
     """
     if not table_fqn:
         table_fqn = _qa_table_fqn()
@@ -446,7 +419,6 @@ def run_validation_sqls(session, table_fqn="", order_date_value=None):
         if not count_sql or not diff_sql:
             continue
 
-        # Apply order_date substitution only for execution (templates remain unchanged in table)
         exec_count_sql = _inject_order_date(count_sql, order_date_value)
         exec_diff_sql = _inject_order_date(diff_sql, order_date_value)
 
@@ -455,7 +427,6 @@ def run_validation_sqls(session, table_fqn="", order_date_value=None):
         diff_val = None
         diff_err = None
 
-        # Execute COUNT_SQL
         try:
             cnt_rows = session.sql(exec_count_sql).collect()
             tmp = {"SRC": 0, "TGT": 0}
@@ -468,7 +439,6 @@ def run_validation_sqls(session, table_fqn="", order_date_value=None):
         except Exception as e:
             count_err = str(e)[:4000].replace("'", "''")
 
-        # Execute DIFF_SQL
         try:
             drows = session.sql(exec_diff_sql).collect()
             diff_val = int(drows[0]["DIFF_CNT"]) if drows else 0
@@ -495,17 +465,7 @@ def run_validation_sqls(session, table_fqn="", order_date_value=None):
 
 
 # --------------------------- Public entrypoints -----------------------------
-def main_validate(session, order_date_value=None):
-    """
-    Validation pipeline:
-      - Prepare validation SQLs for each mapping (COUNT_SQL, DIFF_SQL)
-      - Execute and store results/errors
-      - Return summary DataFrame for review
-
-    Uses QA table FQN derived from TABLE_META.
-    order_date_value: optional string to substitute for 'order_date'
-                      in COUNT_SQL and DIFF_SQL at execution time.
-    """
+def main_validate(session: Session, order_date_value=None):
     qa_table = _qa_table_fqn()
 
     prepare_validation_sqls(session, qa_table)
@@ -527,24 +487,18 @@ def main_validate(session, order_date_value=None):
     """)
 
 
-def main(session, order_date_value=None):
+def main(session: Session, order_date_value=None):
     """
     Orchestrator:
       - Generate mapping SQL into QA/mapping table (from TABLE_META)
       - Prepare and execute validation SQLs
       - Return validation summary DataFrame
-
-    order_date_value: optional string to substitute for 'order_date'
-                      when executing the validation SQLs.
     """
     main_generate(session)
     return main_validate(session, order_date_value=order_date_value)
 
 
-# ============================================================
-# Usage examples (for worksheet)
-# ============================================================
-# result_df = main_generate(session)                  # Only generate mapping SQL into QA table
-# result_df = main_validate(session, '2024-06-30')    # Only validate for a given order_date value
-# result_df = main(session, '2024-06-30')             # Orchestrate: generate + validate for that order_date
-# result_df.show()
+# ======================= RUN THIS CELL ======================================
+# Change '2024-06-30' to the desired order_date value
+result_df = main(session, '2024-06-30')
+result_df.show()
