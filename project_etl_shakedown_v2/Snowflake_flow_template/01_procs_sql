@@ -1,0 +1,133 @@
+------------------------------------------------------------
+-- 1. JSON INPUT
+------------------------------------------------------------
+SET INPUT_JSON = $$
+{
+  "tests": [
+    {
+      "db": "DEMO_DB",
+      "schema": "DEMO_SCHEMA",
+      "table": "CUSTOMERS",
+      "column": "EMAIL"
+    },
+    {
+      "db": "DEMO_DB",
+      "schema": "DEMO_SCHEMA",
+      "table": "ORDERS",
+      "column": "ORDER_DATE"
+    }
+  ]
+}
+$$;
+
+
+------------------------------------------------------------
+-- 2. TEMP TABLE (results with pass/fail)
+------------------------------------------------------------
+CREATE OR REPLACE TEMP TABLE DEMO_DB.DEMO_SCHEMA.TEST_RESULTS (
+    test_name   STRING,
+    table_name  STRING,
+    column_name STRING,
+    result_key  STRING,
+    result_val  STRING,
+    status      STRING,
+    details     VARIANT,
+    run_ts      TIMESTAMP
+);
+
+
+------------------------------------------------------------
+-- 3. PROC 1 — Row Count Test
+------------------------------------------------------------
+CREATE OR REPLACE PROCEDURE DEMO_DB.DEMO_SCHEMA.SP_CHECK_TABLE_NOT_EMPTY(INPUT_JSON STRING)
+RETURNS STRING
+LANGUAGE PYTHON
+RUNTIME_VERSION='3.11'
+PACKAGES=('snowflake-snowpark-python')
+HANDLER='run'
+AS
+$$
+import json
+from datetime import datetime
+
+def run(session, INPUT_JSON):
+
+    cfg = json.loads(INPUT_JSON)
+    tables = cfg["tests"]
+
+    for t in tables:
+        full = f"{t['db']}.{t['schema']}.{t['table']}"
+
+        cnt = session.sql(f"SELECT COUNT(*) CNT FROM {full}").collect()[0]["CNT"]
+        status = "PASS" if cnt > 0 else "FAIL"
+
+        session.table("DEMO_DB.DEMO_SCHEMA.TEST_RESULTS").insert_rows([
+            ("Row Count Test", full, None, "TOTAL_ROWS", str(cnt), status, None, datetime.now())
+        ])
+
+    return "Row count test done."
+$$;
+
+
+------------------------------------------------------------
+-- 4. PROC 2 — Null Check Test
+------------------------------------------------------------
+CREATE OR REPLACE PROCEDURE DEMO_DB.DEMO_SCHEMA.SP_CHECK_NULLS(INPUT_JSON STRING)
+RETURNS STRING
+LANGUAGE PYTHON
+RUNTIME_VERSION='3.11'
+PACKAGES=('snowflake-snowpark-python')
+HANDLER='run'
+AS
+$$
+import json
+from datetime import datetime
+
+def run(session, INPUT_JSON):
+
+    cfg = json.loads(INPUT_JSON)
+    tables = cfg["tests"]
+
+    rc_map = {
+        r["TABLE_NAME"]: int(r["RESULT_VAL"])
+        for r in session.table("DEMO_DB.DEMO_SCHEMA.TEST_RESULTS")
+                        .filter("test_name = 'Row Count Test'")
+                        .collect()
+    }
+
+    for t in tables:
+        full = f"{t['db']}.{t['schema']}.{t['table']}"
+        col  = t["column"]
+
+        if rc_map.get(full, 0) == 0:
+            session.table("DEMO_DB.DEMO_SCHEMA.TEST_RESULTS").insert_rows([
+                ("Null Check", full, col, "NULL_COUNT", "0", "SKIPPED", None, datetime.now())
+            ])
+            continue
+
+        null_cnt = session.sql(
+            f"SELECT COUNT(*) CNT FROM {full} WHERE {col} IS NULL"
+        ).collect()[0]["CNT"]
+
+        status = "PASS" if null_cnt == 0 else "FAIL"
+
+        session.table("DEMO_DB.DEMO_SCHEMA.TEST_RESULTS").insert_rows([
+            ("Null Check", full, col, "NULL_COUNT", str(null_cnt), status, None, datetime.now())
+        ])
+
+    return "Null check done."
+$$;
+
+
+------------------------------------------------------------
+-- 5. PROC 3 — Show Results (As a Table)
+------------------------------------------------------------
+CREATE OR REPLACE PROCEDURE DEMO_DB.DEMO_SCHEMA.SP_SHOW_RESULTS()
+RETURNS TABLE (test_name STRING, table_name STRING, column_name STRING, result_key STRING, result_val STRING, status STRING, details VARIANT, run_ts TIMESTAMP)
+LANGUAGE SQL
+AS
+$$
+    SELECT * 
+    FROM DEMO_DB.DEMO_SCHEMA.TEST_RESULTS
+    ORDER BY run_ts;
+$$;
