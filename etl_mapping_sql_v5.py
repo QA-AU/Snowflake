@@ -1,6 +1,11 @@
 # etl_maping_sql_v2.py
 # GENERATE SQL from mapping info, store them, and validate source vs target
 
+# "qa_db_name": "SESAME",
+# "qa_schema_name": "STG_QA",
+# "qa_table_name": "QA_MAP_SQL",
+
+
 from snowflake.snowpark import Session
 import re
 
@@ -20,11 +25,17 @@ TABLE_META = {
     # Now:       "order_date between ('2024-01-01' and '2024-12-31')"
     "date_filter": "order_date between ('2024-01-01' and '2024-12-31')",
 
-    # NEW: the token name to be replaced in SQL (resolved differently for source/target).
+    # Token name to be replaced in SQL (resolved differently for source/target).
     "date_filter_token": "order_date",
 
     # Target-side global filter (optional)
-    "target_filter_clause": "status = 'OPEN'"
+    "target_filter_clause": "status = 'OPEN'",
+
+    # NEW: QA / mapping table location is metadata-driven
+    # If qa_db_name is None, we fall back to source_db_name (or current DB).
+    "qa_db_name": None,                  # e.g. "SESAME" or None to use current / source_db_name
+    "qa_schema_name": "STG",             # default schema for QA table
+    "qa_table_name": "QA_TEMP_MAPPING_SQL"  # table name for generated mapping SQL
 }
 
 COLUMNS = [
@@ -178,6 +189,27 @@ def _debug_on(meta):
     return str(meta.get("debug_mode", "")).strip().upper() == "YES"
 
 
+# NEW: helper to get QA/mapping table FQN from TABLE_META
+def _qa_table_fqn(meta=None):
+    """
+    Build the fully qualified name for the QA/mapping table based on TABLE_META.
+    Default: <qa_db_name or source_db_name>.<qa_schema_name>.<qa_table_name>
+    If qa_db_name is None, db part is omitted.
+    """
+    if meta is None:
+        meta = TABLE_META
+
+    db = meta.get("qa_db_name")
+    if _is_null(db):
+        # fallback to source_db_name (might also be None, which _path can handle)
+        db = meta.get("source_db_name")
+
+    schema = meta.get("qa_schema_name")
+    table = meta.get("qa_table_name", "QA_TEMP_MAPPING_SQL")
+
+    return _path(db, schema, table)
+
+
 # -------------------------- SQL Builders ------------------------------------
 def build_source_sql(meta, col):
     debug = _debug_on(meta)
@@ -228,7 +260,7 @@ def build_source_sql(meta, col):
     if debug:
         print(f"[DEBUG] select_clause -> {select_clause}")
 
-    # CHANGE: resolve variable-style date_filter for SOURCE using alias (e.g. o.order_date)
+    # resolve variable-style date_filter for SOURCE using alias (e.g. o.order_date)
     date_flt = _resolve_date_filter(meta, alias=alias, for_target=False)
 
     # WHERE: combine source filter + resolved date_filter
@@ -266,7 +298,7 @@ def build_target_sql(meta, col):
     if debug:
         print(f"[DEBUG] select_clause (target) -> {select_clause}")
 
-    # CHANGE: resolve variable-style date_filter for TARGET (typically plain column name)
+    # resolve variable-style date_filter for TARGET (typically plain column name)
     date_flt = _resolve_date_filter(meta, alias=None, for_target=True)
 
     # WHERE: combine target filter + resolved date_filter
@@ -283,13 +315,16 @@ def build_target_sql(meta, col):
 # --------------------------- Main Entry (Generator) -------------------------
 def main_generate(session: Session):
     """
-    Generate mapping SQL into QA_TEMP_MAPPING_SQL and return its contents.
+    Generate mapping SQL into the QA/mapping table and return its contents.
+    Location is driven by TABLE_META (qa_db_name, qa_schema_name, qa_table_name).
     """
-    session.sql("""
-        CREATE OR REPLACE TRANSIENT TABLE QA_TEMP_MAPPING_SQL (
-            COLUMN_NAME STRING,
-            SQL_TEXT STRING,
-            TARGET_TABLE_SQL STRING
+    qa_table = _qa_table_fqn()
+
+    session.sql(f"""
+        CREATE OR REPLACE TRANSIENT TABLE {qa_table} (
+            COLUMN_NAME       STRING,
+            SQL_TEXT          STRING,
+            TARGET_TABLE_SQL  STRING
         )
     """).collect()
 
@@ -302,12 +337,12 @@ def main_generate(session: Session):
         src_esc = src_sql.replace("'", "''")
         tgt_esc = tgt_sql.replace("'", "''")
         session.sql(f"""
-            INSERT INTO QA_TEMP_MAPPING_SQL (COLUMN_NAME, SQL_TEXT, TARGET_TABLE_SQL)
+            INSERT INTO {qa_table} (COLUMN_NAME, SQL_TEXT, TARGET_TABLE_SQL)
             VALUES ('{col_esc}', '{src_esc}', '{tgt_esc}')
         """).collect()
 
     # Return DataFrame with generated mapping SQL
-    return session.sql("SELECT * FROM QA_TEMP_MAPPING_SQL ORDER BY COLUMN_NAME")
+    return session.sql(f"SELECT * FROM {qa_table} ORDER BY COLUMN_NAME")
 
 
 # -------------- EXECUTOR / VALIDATOR FUNCTIONS --------
@@ -341,13 +376,18 @@ def _ensure_validation_columns(session, table_fqn: str):
 # ============================================================
 # Function A: Prepare validation SQLs
 # ============================================================
-def prepare_validation_sqls(session, table_fqn: str = "STG.QA_TEMP_MAPPING_SQL"):
+def prepare_validation_sqls(session, table_fqn: str = ""):
     """
     A) Generate and store COUNT_SQL & DIFF_SQL per row.
        COUNT_SQL: count of (SQL_TEXT) UNION ALL count of (TARGET_TABLE_SQL)
        DIFF_SQL : count of ( (SQL_TEXT) MINUS (TARGET_TABLE_SQL) )
     Resets prior results/errors.
+
+    If table_fqn is empty, uses TABLE_META (qa_* settings).
     """
+    if not table_fqn:
+        table_fqn = _qa_table_fqn()
+
     _ensure_validation_columns(session, table_fqn)
 
     rows = session.sql(f"""
@@ -405,14 +445,19 @@ def prepare_validation_sqls(session, table_fqn: str = "STG.QA_TEMP_MAPPING_SQL")
 # ============================================================
 # Function B: Run validation SQLs and capture results/errors
 # ============================================================
-def run_validation_sqls(session, table_fqn: str = "STG.QA_TEMP_MAPPING_SQL"):
+def run_validation_sqls(session, table_fqn: str = ""):
     """
     B) Execute the prepared SQLs per row and store results.
        - COUNT_RESULT_JSON: {"SRC": n1, "TGT": n2}
        - DIFF_RESULT: rows in SRC but not in TGT
        - COUNT_ERROR / DIFF_ERROR: error message if SQL fails
     Execution continues even if some rows fail.
+
+    If table_fqn is empty, uses TABLE_META (qa_* settings).
     """
+    if not table_fqn:
+        table_fqn = _qa_table_fqn()
+
     _ensure_validation_columns(session, table_fqn)
 
     rows = session.sql(f"""
@@ -485,13 +530,14 @@ def main_validate(session: Session):
       1️ Prepare validation SQLs for each mapping (COUNT_SQL, DIFF_SQL)
       2️ Execute and store results/errors
       3️ Return summary DataFrame for review
+    Uses QA table FQN derived from TABLE_META.
     """
-    target_table = "STG.QA_TEMP_MAPPING_SQL"
+    qa_table = _qa_table_fqn()
 
-    prepare_validation_sqls(session, target_table)
+    prepare_validation_sqls(session, qa_table)
     print("Validation SQLs prepared.")
 
-    run_validation_sqls(session, target_table)
+    run_validation_sqls(session, qa_table)
     print("Validation SQLs executed.")
 
     # Return DataFrame summary for worksheet display
@@ -503,7 +549,7 @@ def main_validate(session: Session):
             DIFF_RESULT,
             COUNT_ERROR,
             DIFF_ERROR
-        FROM {target_table}
+        FROM {qa_table}
         ORDER BY ROW_ID
     """)
 
@@ -514,8 +560,8 @@ def main_validate(session: Session):
 def main(session: Session):
     """
     Orchestrator:
-      1️ Generate mapping SQL into QA_TEMP_MAPPING_SQL
-      2️ Prepare and execute validation SQLs (using STG.QA_TEMP_MAPPING_SQL)
+      1️ Generate mapping SQL into QA/mapping table (from TABLE_META)
+      2️ Prepare and execute validation SQLs
       3️ Return validation summary DataFrame
     """
     # Step 1: generate mapping SQL
@@ -528,16 +574,17 @@ def main(session: Session):
 # ============================================================
 # Run interactively in worksheet (choose one)
 # ============================================================
-# main_generate(session)   # Only generate mapping SQL into QA_TEMP_MAPPING_SQL
+# main_generate(session)   # Only generate mapping SQL into QA table
 # main_validate(session)   # Only validate already-generated mappings
 main(session)              # Orchestrate: generate + validate, return validation summary
 
 # HOW TO RUN MANUALLY (if needed):
-# prepare_validation_sqls(session, "STG.QA_TEMP_MAPPING_SQL")
-# run_validation_sqls(session, "STG.QA_TEMP_MAPPING_SQL")
+# qa_table = _qa_table_fqn()
+# prepare_validation_sqls(session, qa_table)
+# run_validation_sqls(session, qa_table)
 #
-# session.sql("""
+# session.sql(f"""
 #   SELECT ROW_ID, COLUMN_NAME, COUNT_RESULT_JSON, DIFF_RESULT, COUNT_ERROR, DIFF_ERROR
-#   FROM STG.QA_TEMP_MAPPING_SQL
+#   FROM {qa_table}
 #   ORDER BY ROW_ID
 # """).show()
