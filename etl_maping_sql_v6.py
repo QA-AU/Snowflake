@@ -1,12 +1,5 @@
-
-
 # etl_maping_sql_v2.py
 # GENERATE SQL from mapping info, store them, and validate source vs target
-
-# main(session, '2024-12-31')
-# -- or
-# run_validation_sqls(session, order_date_value='2024-12-31')
-
 
 from snowflake.snowpark import Session
 import re
@@ -321,8 +314,8 @@ def build_target_sql(meta, col):
     return "\n".join(sql) + ";"
 
 
-# --------------------------- Main Entry (Generator) -------------------------
-def main_generate(session: Session):
+# --------------------------- Generator --------------------------------------
+def main_generate(session):
     """
     Generate mapping SQL into the QA/mapping table and return its contents.
     Location is driven by TABLE_META (qa_db_name, qa_schema_name, qa_table_name).
@@ -361,12 +354,8 @@ def main_generate(session: Session):
     return session.sql(f"SELECT * FROM {qa_table} ORDER BY COLUMN_NAME")
 
 
-# -------------- EXECUTOR / VALIDATOR FUNCTIONS --------
-
-# ============================================================
-# Function A: Prepare validation SQLs
-# ============================================================
-def prepare_validation_sqls(session, table_fqn: str = ""):
+# --------------------------- Validator --------------------------------------
+def prepare_validation_sqls(session, table_fqn=""):
     """
     Generate and store COUNT_SQL and DIFF_SQL per row.
       - COUNT_SQL: count of (SQL_TEXT) UNION ALL count of (TARGET_TABLE_SQL)
@@ -426,10 +415,7 @@ def prepare_validation_sqls(session, table_fqn: str = ""):
         """).collect()
 
 
-# ============================================================
-# Function B: Run validation SQLs and capture results/errors
-# ============================================================
-def run_validation_sqls(session, table_fqn: str = "", order_date_value=None):
+def run_validation_sqls(session, table_fqn="", order_date_value=None):
     """
     Execute the prepared SQLs per row and store results.
       - COUNT_RESULT_JSON: {"SRC": n1, "TGT": n2}
@@ -441,6 +427,7 @@ def run_validation_sqls(session, table_fqn: str = "", order_date_value=None):
 
     order_date_value: optional string literal to substitute for the token
                       'order_date' in COUNT_SQL and DIFF_SQL at execution time.
+                      If None, the query will still contain the token 'order_date'.
     """
     if not table_fqn:
         table_fqn = _qa_table_fqn()
@@ -507,10 +494,8 @@ def run_validation_sqls(session, table_fqn: str = "", order_date_value=None):
         """).collect()
 
 
-# ============================================================
-# Validation entrypoint (validate existing mappings)
-# ============================================================
-def main_validate(session: Session, order_date_value=None):
+# --------------------------- Public entrypoints -----------------------------
+def main_validate(session, order_date_value=None):
     """
     Validation pipeline:
       - Prepare validation SQLs for each mapping (COUNT_SQL, DIFF_SQL)
@@ -542,10 +527,7 @@ def main_validate(session: Session, order_date_value=None):
     """)
 
 
-# ============================================================
-# Orchestrator main: generate + validate
-# ============================================================
-def main(session: Session, order_date_value=None):
+def main(session, order_date_value=None):
     """
     Orchestrator:
       - Generate mapping SQL into QA/mapping table (from TABLE_META)
@@ -560,8 +542,9 @@ def main(session: Session, order_date_value=None):
 
 
 # ============================================================
-# Run interactively in worksheet (choose one)
+# Usage examples (for worksheet)
 # ============================================================
-# main_generate(session)                   # Only generate mapping SQL into QA table
-# main_validate(session, '2024-06-30')     # Only validate for a given order_date value
-main(session, '2024-06-30')               # Orchestrate: generate + validate for that order_date
+# result_df = main_generate(session)                  # Only generate mapping SQL into QA table
+# result_df = main_validate(session, '2024-06-30')    # Only validate for a given order_date value
+# result_df = main(session, '2024-06-30')             # Orchestrate: generate + validate for that order_date
+# result_df.show()
