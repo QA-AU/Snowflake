@@ -448,12 +448,17 @@ def main_validate(session: Session, order_date_value=None):
     run_validation_sqls(session, qa, order_date_value)
 
     return session.sql(f"""
-        SELECT ROW_ID,
-               COLUMN_NAME,          -- used as TARGET_TABLE_ID (schema.table)
-               COUNT_RESULT_JSON,
-               DIFF_RESULT,
-               COUNT_ERROR,
-               DIFF_ERROR
+        SELECT 
+        ROW_ID,
+        COLUMN_NAME AS TARGET_TABLE_NAME,
+        SQL_TEXT,
+        TARGET_TABLE_SQL,
+        COUNT_SQL,
+        DIFF_SQL,
+        COUNT_RESULT_JSON,
+        DIFF_RESULT,
+        COUNT_ERROR,
+        DIFF_ERROR
         FROM {qa}
         ORDER BY ROW_ID
     """)
