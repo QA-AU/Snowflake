@@ -1,0 +1,1 @@
+Write a stored proc in snowflake that takes 3 inputs - dbname, schemaname, targettablename, flag to indicate herders in file, list of header to use if provided
