@@ -451,7 +451,7 @@ def main_validate(session: Session, order_date_value=None):
         SELECT 
         ROW_ID,
         COLUMN_NAME AS TARGET_TABLE_NAME,
-        SQL_TEXT,
+        SQL_TEXT as SOURCE_TABLE_SQL,
         TARGET_TABLE_SQL,
         COUNT_SQL,
         DIFF_SQL,

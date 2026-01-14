@@ -1,0 +1,503 @@
+ # STAGE 1 - CREATE DELTA TABLE
+
+
+
+from snowflake.snowpark import Session
+
+# =========================================================
+# SCD METADATA DICTIONARY (META_SCD)
+#   - One entry per TARGET_TABLE_NAME (e.g. CORE.ORDERS)
+#   - Used ONLY in Stage 0 to enrich QA_SCD_META
+# =========================================================
+
+META_SCD = {
+    "CORE.ORDERS": {
+        # Natural key columns (CSV)
+        "scd_nk_columns": "ORDER_ID,LINE_NO",
+
+        # Business/SCD driver date column
+        "scd_date_column": "order_date",
+
+        # Open-ended validity date value for "current" rows
+        "scd_open_end_date": "9999-12-31",
+
+        # Whether this table participates in SCD2 checks
+        "scd_active_flag": "Y",
+
+        # Daily SCD processing window:
+        #  - These will be OVERRIDDEN in Stage 0 using processing_date
+        "scd_window_start": None,
+        "scd_window_end":   None,
+
+        # SCD2 technical columns in the CORE table
+        "scd_start_column":           "strt_dt",
+        "scd_end_column":             "end_dt",
+        "scd_extracted_column":       "extracted_date",
+        "scd_logical_delete_column":  "logical_delete_date",
+        "scd_delete_flag_column":     "RECD_DEL_IND",
+    }
+
+    # Add more target tables later if needed, same structure as above
+}
+
+
+# =========================================================
+# STAGE 0: METADATA TABLE CREATION + LOAD
+#
+#   - Creates permanent QA_SCD_META table
+#   - Merges:
+#       * mapping SQL from QA_TEMP_MAPPING_SQL
+#       * SCD config from META_SCD
+#   - Sets daily window (SCD_WINDOW_START/END) = processing_date
+# =========================================================
+
+def create_qa_scd_meta_table(session: Session, qa_scd_meta_fqn: str = "QA_SCD_META"):
+    """
+    Create (or replace) permanent QA_SCD_META table that stores:
+      - Mapping SQL metadata
+      - SCD configuration
+      - Placeholders for all SCD pipeline outputs
+    """
+    session.sql(f"""
+        CREATE OR REPLACE TABLE {qa_scd_meta_fqn} (
+            ROW_ID                      NUMBER,
+            TARGET_TABLE_NAME           STRING,
+            SOURCE_TABLE_SQL            STRING,
+            TARGET_TABLE_SQL            STRING,
+
+            -- Stage 1
+            DELTA_TABLE                 STRING,
+
+            -- Stage 2
+            PRE_SCD2_TABLE              STRING,
+
+            -- Stage 3
+            POST_SCD2_TABLE             STRING,
+            SCD2_SQL                    STRING,
+
+            -- Stage 4
+            COMPARE_TABLE_SQL           STRING,
+            COMPARE_ROWCOUNT_SQL        STRING,
+            COMPARE_RESULT_JSON         VARIANT,
+            COMPARE_ERROR               STRING,
+            ROWCOUNT_RESULT_JSON        VARIANT,
+            ROWCOUNT_ERROR              STRING,
+
+            -- Legacy validation fields (optional)
+            COUNT_SQL                   STRING,
+            DIFF_SQL                    STRING,
+            COUNT_RESULT_JSON           VARIANT,
+            DIFF_RESULT                 NUMBER,
+            COUNT_ERROR                 STRING,
+            DIFF_ERROR                  STRING,
+
+            -- SCD config (per table)
+            SCD_NK_COLUMNS              STRING,
+            SCD_DATE_COLUMN             STRING,
+            SCD_OPEN_END_DATE           DATE,
+            SCD_ACTIVE_FLAG             STRING,
+            SCD_WINDOW_START            DATE,
+            SCD_WINDOW_END              DATE,
+            SCD_START_COLUMN            STRING,
+            SCD_END_COLUMN              STRING,
+            SCD_EXTRACTED_COLUMN        STRING,
+            SCD_LOGICAL_DELETE_COLUMN   STRING,
+            SCD_DELETE_FLAG_COLUMN      STRING
+        )
+    """).collect()
+
+
+def populate_qa_scd_meta_from_mapping(
+    session: Session,
+    mapping_table_fqn: str = "QA_TEMP_MAPPING_SQL",
+    qa_scd_meta_fqn: str   = "QA_SCD_META",
+    meta_scd: dict         = META_SCD,
+    processing_date: str   = None,
+):
+    """
+    STAGE 0:
+      - Reads mapping SQL rows from QA_TEMP_MAPPING_SQL
+      - For each target table, merges SCD config from META_SCD
+      - Writes a single consolidated row per mapping into QA_SCD_META
+      - SCD_WINDOW_START/END are both set to the provided processing_date
+
+    EXPECTS mapping_table_fqn columns:
+      - ROW_ID
+      - COLUMN_NAME       (e.g. 'CORE.ORDERS')
+      - SQL_TEXT          (source SQL)
+      - TARGET_TABLE_SQL  (target SQL)
+    """
+
+    if processing_date is None:
+        raise ValueError("processing_date must be provided for daily SCD runs (YYYY-MM-DD).")
+
+    create_qa_scd_meta_table(session, qa_scd_meta_fqn)
+
+    # Helper for safe SQL literals
+    def _lit_or_null(val: str):
+        if val is None:
+            return "NULL"
+        return "'" + str(val).replace("'", "''") + "'"
+
+    # Load all mapping entries
+    rows = session.sql(f"""
+        SELECT ROW_ID, COLUMN_NAME, SQL_TEXT, TARGET_TABLE_SQL
+        FROM {mapping_table_fqn}
+        ORDER BY ROW_ID
+    """).collect()
+
+    for r in rows:
+        row_id         = r["ROW_ID"]
+        target_name    = r["COLUMN_NAME"]          # e.g. 'CORE.ORDERS'
+        source_sql     = r["SQL_TEXT"]
+        target_sql     = r["TARGET_TABLE_SQL"]
+
+        tgt_esc        = (target_name or "").replace("'", "''")
+        src_sql_esc    = (source_sql or "").replace("'", "''") if source_sql else ""
+        tgt_sql_esc    = (target_sql or "").replace("'", "''") if target_sql else ""
+
+        # Lookup SCD config (may be empty if table not in META_SCD)
+        scd_cfg        = meta_scd.get(target_name, {}) or {}
+
+        scd_nk_cols    = scd_cfg.get("scd_nk_columns")
+        scd_date_col   = scd_cfg.get("scd_date_column")
+        scd_open_end   = scd_cfg.get("scd_open_end_date")
+        scd_active     = scd_cfg.get("scd_active_flag")
+
+        scd_start_col  = scd_cfg.get("scd_start_column")
+        scd_end_col    = scd_cfg.get("scd_end_column")
+        scd_extr_col   = scd_cfg.get("scd_extracted_column")
+        scd_logdel_col = scd_cfg.get("scd_logical_delete_column")
+        scd_del_flag   = scd_cfg.get("scd_delete_flag_column")
+
+        # DAILY window override: both start & end are processing_date
+        win_start_expr = f"TO_DATE('{processing_date}')"
+        win_end_expr   = f"TO_DATE('{processing_date}')"
+
+        nk_expr        = _lit_or_null(scd_nk_cols)
+        date_col_expr  = _lit_or_null(scd_date_col)
+        active_expr    = _lit_or_null(scd_active)
+
+        open_end_expr  = (
+            f"TO_DATE('{scd_open_end}')" if scd_open_end is not None else "NULL"
+        )
+
+        start_col_expr = _lit_or_null(scd_start_col)
+        end_col_expr   = _lit_or_null(scd_end_col)
+        extr_col_expr  = _lit_or_null(scd_extr_col)
+        logdel_expr    = _lit_or_null(scd_logdel_col)
+        delflag_expr   = _lit_or_null(scd_del_flag)
+
+        # Insert merged row into QA_SCD_META
+        session.sql(f"""
+            INSERT INTO {qa_scd_meta_fqn} (
+                ROW_ID,
+                TARGET_TABLE_NAME,
+                SOURCE_TABLE_SQL,
+                TARGET_TABLE_SQL,
+
+                DELTA_TABLE,
+                PRE_SCD2_TABLE,
+                POST_SCD2_TABLE,
+                SCD2_SQL,
+                COMPARE_TABLE_SQL,
+                COMPARE_ROWCOUNT_SQL,
+                COMPARE_RESULT_JSON,
+                COMPARE_ERROR,
+                ROWCOUNT_RESULT_JSON,
+                ROWCOUNT_ERROR,
+
+                COUNT_SQL,
+                DIFF_SQL,
+                COUNT_RESULT_JSON,
+                DIFF_RESULT,
+                COUNT_ERROR,
+                DIFF_ERROR,
+
+                SCD_NK_COLUMNS,
+                SCD_DATE_COLUMN,
+                SCD_OPEN_END_DATE,
+                SCD_ACTIVE_FLAG,
+                SCD_WINDOW_START,
+                SCD_WINDOW_END,
+                SCD_START_COLUMN,
+                SCD_END_COLUMN,
+                SCD_EXTRACTED_COLUMN,
+                SCD_LOGICAL_DELETE_COLUMN,
+                SCD_DELETE_FLAG_COLUMN
+            )
+            VALUES (
+                {row_id},
+                '{tgt_esc}',
+                '{src_sql_esc}',
+                '{tgt_sql_esc}',
+
+                NULL,  -- DELTA_TABLE
+                NULL,  -- PRE_SCD2_TABLE
+                NULL,  -- POST_SCD2_TABLE
+                NULL,  -- SCD2_SQL
+                NULL,  -- COMPARE_TABLE_SQL
+                NULL,  -- COMPARE_ROWCOUNT_SQL
+                NULL,  -- COMPARE_RESULT_JSON
+                NULL,  -- COMPARE_ERROR
+                NULL,  -- ROWCOUNT_RESULT_JSON
+                NULL,  -- ROWCOUNT_ERROR
+
+                NULL,  -- COUNT_SQL
+                NULL,  -- DIFF_SQL
+                NULL,  -- COUNT_RESULT_JSON
+                NULL,  -- DIFF_RESULT
+                NULL,  -- COUNT_ERROR
+                NULL,  -- DIFF_ERROR
+
+                {nk_expr},           -- SCD_NK_COLUMNS
+                {date_col_expr},     -- SCD_DATE_COLUMN
+                {open_end_expr},     -- SCD_OPEN_END_DATE
+                {active_expr},       -- SCD_ACTIVE_FLAG
+                {win_start_expr},    -- SCD_WINDOW_START
+                {win_end_expr},      -- SCD_WINDOW_END
+                {start_col_expr},    -- SCD_START_COLUMN
+                {end_col_expr},      -- SCD_END_COLUMN
+                {extr_col_expr},     -- SCD_EXTRACTED_COLUMN
+                {logdel_expr},       -- SCD_LOGICAL_DELETE_COLUMN
+                {delflag_expr}       -- SCD_DELETE_FLAG_COLUMN
+            )
+        """).collect()
+
+
+# =========================================================
+# STAGE 1: CREATE DELTA TABLE FOR A SINGLE TABLE
+#
+#   - Reads SOURCE_TABLE_SQL + SCD_DATE_COLUMN + window from QA_SCD_META
+#   - Enforces 1-day window
+#   - Creates TEMP delta table in:
+#         <source_db_name>.<source_schema_name>.<target_table>
+#   - Applies WHERE <SCD_DATE_COLUMN> = <processing_date>
+#   - Updates QA_SCD_META.DELTA_TABLE with table name OR 'Error in SQL'
+# =========================================================
+
+def stage1_create_delta_table_for_single_table(
+    session: Session,
+    table_meta: dict,
+    qa_scd_meta_fqn: str,
+    target_table_name: str,
+):
+    """
+    STAGE 1 - CREATE DELTA TEMP TABLE for ONE TARGET TABLE.
+
+    Inputs:
+      - session: Snowpark Session
+      - table_meta: TABLE_META dict with keys:
+            * debug_mode
+            * source_db_name
+            * source_schema_name
+      - qa_scd_meta_fqn: QA_SCD_META table name
+      - target_table_name: e.g. 'CORE.ORDERS'
+
+    Behaviour:
+      1. Get the row for TARGET_TABLE_NAME from QA_SCD_META
+      2. Use SOURCE_TABLE_SQL as inner query
+      3. Use SCD_DATE_COLUMN and SCD_WINDOW_START (== SCD_WINDOW_END) as daily filter
+      4. CREATE OR REPLACE TEMP TABLE <source_db>.<source_schema>.<target_table>
+         with an outer WHERE <date_column> = <processing_date>
+      5. On success: QA_SCD_META.DELTA_TABLE = full table name
+         On error:   QA_SCD_META.DELTA_TABLE = 'Error in SQL'
+    """
+
+    debug = str(table_meta.get("debug_mode", "")).strip().upper() == "YES"
+
+    # ----------------------------------------------------
+    # Fetch metadata row for this table
+    # ----------------------------------------------------
+    rows = session.sql(f"""
+        SELECT
+            ROW_ID,
+            TARGET_TABLE_NAME,
+            SOURCE_TABLE_SQL,
+            SCD_DATE_COLUMN,
+            SCD_WINDOW_START,
+            SCD_WINDOW_END
+        FROM {qa_scd_meta_fqn}
+        WHERE TARGET_TABLE_NAME = '{target_table_name}'
+    """).collect()
+
+    if not rows:
+        raise ValueError(
+            f"No metadata found in {qa_scd_meta_fqn} for TARGET_TABLE_NAME = '{target_table_name}'"
+        )
+
+    r = rows[0]
+
+    row_id          = r["ROW_ID"]
+    source_sql      = r["SOURCE_TABLE_SQL"]
+    scd_date_column = r["SCD_DATE_COLUMN"]
+    win_start       = r["SCD_WINDOW_START"]
+    win_end         = r["SCD_WINDOW_END"]
+
+    if source_sql is None:
+        raise ValueError(
+            f"SOURCE_TABLE_SQL is NULL for {target_table_name} in {qa_scd_meta_fqn}"
+        )
+
+    if scd_date_column is None:
+        raise ValueError(
+            f"SCD_DATE_COLUMN is NULL for {target_table_name} in {qa_scd_meta_fqn}"
+        )
+
+    if win_start is None or win_end is None:
+        raise ValueError(
+            f"SCD_WINDOW_START or SCD_WINDOW_END is NULL for {target_table_name}"
+        )
+
+    # ----------------------------------------------------
+    # Enforce daily window: start == end
+    # ----------------------------------------------------
+    if str(win_start) != str(win_end):
+        raise ValueError(
+            f"SCD window must be one day for {target_table_name}: "
+            f"{win_start} -> {win_end}"
+        )
+
+    processing_date = str(win_start)
+
+    # ----------------------------------------------------
+    # Build TEMP delta table name
+    # ----------------------------------------------------
+    src_db     = table_meta["source_db_name"]
+    src_schema = table_meta["source_schema_name"]
+
+    parts = target_table_name.split(".")
+    if len(parts) != 2:
+        raise ValueError(
+            f"TARGET_TABLE_NAME must be SCHEMA.TABLE (e.g. CORE.ORDERS), got '{target_table_name}'"
+        )
+
+    target_schema = parts[0]   # not used for table name, but informational
+    target_table  = parts[1]
+
+    delta_table_fqn = f"{src_db}.{src_schema}.{target_table}"
+
+    # ----------------------------------------------------
+    # Build CREATE TEMP TABLE SQL
+    # ----------------------------------------------------
+    inner_sql = str(source_sql).rstrip(" ;\n\t")
+
+    create_sql = f"""
+        CREATE OR REPLACE TEMP TABLE {delta_table_fqn} AS
+        SELECT *
+        FROM (
+{inner_sql}
+        ) SRC
+        WHERE {scd_date_column} = TO_DATE('{processing_date}')
+    """
+
+    if debug:
+        print("\n========== STAGE 1 DEBUG ==========")
+        print(f"TARGET_TABLE_NAME    : {target_table_name}")
+        print(f"Delta TEMP table     : {delta_table_fqn}")
+        print(f"SCD_DATE_COLUMN      : {scd_date_column}")
+        print(f"Processing date      : {processing_date}")
+        print("CREATE SQL:")
+        print(create_sql)
+        print("===================================\n")
+
+    # ----------------------------------------------------
+    # Execute and handle success/error
+    # ----------------------------------------------------
+    try:
+        session.sql(create_sql).collect()
+        result_value = delta_table_fqn
+
+        if debug:
+            print(f"[STAGE 1] SUCCESS: Delta table created: {delta_table_fqn}")
+
+    except Exception as e:
+        result_value = "Error in SQL"
+        if debug:
+            print(f"[STAGE 1] ERROR while creating delta table for {target_table_name}:")
+            print(str(e))
+
+    # ----------------------------------------------------
+    # Update QA_SCD_META.DELTA_TABLE
+    # ----------------------------------------------------
+    result_esc = result_value.replace("'", "''")
+
+    if debug:
+        print(f"[STAGE 1] Updating {qa_scd_meta_fqn}.DELTA_TABLE → {result_value}")
+
+    session.sql(f"""
+        UPDATE {qa_scd_meta_fqn}
+        SET DELTA_TABLE = '{result_esc}'
+        WHERE ROW_ID = {row_id}
+    """).collect()
+
+    # ----------------------------------------------------
+    # Return full table name or None
+    # ----------------------------------------------------
+    if result_value == "Error in SQL":
+        return None
+
+    return delta_table_fqn
+
+# Running 
+
+# 0) Assume TABLE_META already exists and has:
+#    - source_db_name
+#    - source_schema_name
+#    - debug_mode
+
+def main(session: Session, processing_date: str, target_table_name: str):
+    """
+    Main orchestrator for SCD pipeline stages.
+    
+    Steps:
+      1. Stage 0 - Load metadata into QA_SCD_META (one-time per run)
+      2. Stage 1 - Create delta table for the target table
+      (Stages 2,3,4 can be added here later)
+    """
+
+    print("\n===== START SCD PIPELINE =====")
+    print(f"Processing date      : {processing_date}")
+    print(f"Target table         : {target_table_name}")
+    print("================================\n")
+
+    # ------------------------------------------------
+    # Stage 0 - Build SCD metadata (per processing day)
+    # ------------------------------------------------
+    print("Running Stage 0: Load QA_SCD_META...")
+    populate_qa_scd_meta_from_mapping(
+        session=session,
+        mapping_table_fqn="QA_TEMP_MAPPING_SQL",
+        qa_scd_meta_fqn="QA_SCD_META",
+        meta_scd=META_SCD,
+        processing_date=processing_date
+    )
+    print("Stage 0 complete.\n")
+
+    # ------------------------------------------------
+    # Stage 1 - Create delta table (TEMP)
+    # ------------------------------------------------
+    print("Running Stage 1: Create delta table...")
+    delta_table = stage1_create_delta_table_for_single_table(
+        session=session,
+        table_meta=TABLE_META,
+        qa_scd_meta_fqn="QA_SCD_META",
+        target_table_name=target_table_name
+    )
+
+    if delta_table:
+        print(f"Stage 1 complete: Delta table created → {delta_table}\n")
+    else:
+        print("Stage 1 FAILED: Delta table not created.\n")
+
+    print("===== SCD PIPELINE COMPLETE =====")
+    return delta_table
+
+
+result = main(
+    session=session,
+    processing_date="2024-07-01",
+    target_table_name="CORE.ORDERS"
+)
+
+print("Final result:", result)
