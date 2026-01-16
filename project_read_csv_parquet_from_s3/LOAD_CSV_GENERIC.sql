@@ -1,6 +1,6 @@
 /* ============================================================================
  PROCEDURE NAME  : STG.LOAD_CSV_GENERIC
- VERSION         : 1.2.3
+ VERSION         : 1.2.4
  CREATED ON      : 2026-01-16
 
  PURPOSE
@@ -53,8 +53,8 @@ AS
 $$
 from snowflake.snowpark import Session
 from snowflake.snowpark.functions import (
-    col, split, regexp_replace, when, upper,
-    size, row_number, lit, expr
+    col, split, regexp_replace, size,
+    row_number, lit, expr
 )
 from snowflake.snowpark.window import Window
 import uuid
@@ -118,12 +118,18 @@ def run(session: Session,
     """).collect()
 
     # --------------------------------------------------
-    # START TELEMETRY
+    # START TELEMETRY (via DataFrame)
     # --------------------------------------------------
-    session.table(telemetry_table).insert([
-        (run_id, "START", stage_path, target_table,
-         has_header, None, "RUNNING", None, None, None)
-    ])
+    start_df = session.create_dataframe(
+        [(run_id, "START", stage_path, target_table,
+          has_header, None, "RUNNING", None, None, None)],
+        schema=[
+            "RUN_ID", "EVENT_TYPE", "FILE_PATH", "TARGET_TABLE",
+            "HEADER_PRESENT", "RECORD_COUNT", "STATUS",
+            "SAMPLE_ROW_1", "SAMPLE_ROW_2", "HEADERS"
+        ]
+    )
+    start_df.write.mode("append").save_as_table(telemetry_table)
 
     # --------------------------------------------------
     # LOAD RAW CSV (ENTIRE LINE AS STRING)
@@ -153,7 +159,7 @@ def run(session: Session,
     df = df.with_column("rn", row_number().over(w))
 
     # --------------------------------------------------
-    # SAMPLE ROWS FOR TELEMETRY
+    # SAMPLE ROWS
     # --------------------------------------------------
     samples = df.select("raw_row").limit(2).collect()
     sample1 = samples[0][0] if len(samples) > 0 else None
@@ -186,12 +192,12 @@ def run(session: Session,
         headers = [f"COL_{i+1}" for i in range(inferred_col_count)]
 
     # --------------------------------------------------
-    # SPLIT RAW ROW INTO ARRAY
+    # SPLIT RAW ROW
     # --------------------------------------------------
     df = df.with_column("columns", split(col("raw_row"), lit(delimiter)))
 
     # --------------------------------------------------
-    # CLEAN USING PURE SNOWFLAKE SQL (SAFE)
+    # CLEAN USING PURE SQL (GUARANTEED)
     # --------------------------------------------------
     df = df.with_column(
         "clean_columns",
@@ -220,16 +226,22 @@ def run(session: Session,
     record_count = final_df.count()
 
     # --------------------------------------------------
-    # END TELEMETRY
+    # END TELEMETRY (via DataFrame)
     # --------------------------------------------------
-    session.table(telemetry_table).insert([
-        (run_id, "END", stage_path, target_table,
-         has_header, record_count, "SUCCESS",
-         sample1, sample2, headers)
-    ])
+    end_df = session.create_dataframe(
+        [(run_id, "END", stage_path, target_table,
+          has_header, record_count, "SUCCESS",
+          sample1, sample2, headers)],
+        schema=[
+            "RUN_ID", "EVENT_TYPE", "FILE_PATH", "TARGET_TABLE",
+            "HEADER_PRESENT", "RECORD_COUNT", "STATUS",
+            "SAMPLE_ROW_1", "SAMPLE_ROW_2", "HEADERS"
+        ]
+    )
+    end_df.write.mode("append").save_as_table(telemetry_table)
 
     return {
-        "version": "1.2.3",
+        "version": "1.2.4",
         "run_id": run_id,
         "file_path": stage_path,
         "target_table": target_table,
