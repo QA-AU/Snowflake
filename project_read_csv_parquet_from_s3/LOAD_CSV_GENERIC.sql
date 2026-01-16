@@ -1,6 +1,6 @@
 /* ============================================================================
  PROCEDURE NAME  : STG.LOAD_CSV_GENERIC
- VERSION         : 1.2.7
+ VERSION         : 1.2.8
  CREATED ON      : 2026-01-16
 
  PURPOSE
@@ -19,8 +19,6 @@
    - STG.<USER_PREFIX>_RAW_CSV_LANDING
    - STG.<USER_PREFIX>_CSV_LOAD_TELEMETRY
    - <TARGET_TABLE>
-
- Designed for deterministic reruns (QA / migration / reconciliation).
 
  PARAMETERS
  ----------
@@ -53,8 +51,7 @@ AS
 $$
 from snowflake.snowpark import Session
 from snowflake.snowpark.functions import (
-    col, split, size, row_number, lit,
-    regexp_replace, upper, when
+    col, split, size, row_number, lit
 )
 from snowflake.snowpark.window import Window
 import uuid
@@ -73,6 +70,9 @@ def run(session: Session,
     telemetry_table = f"STG.{user_prefix}_CSV_LOAD_TELEMETRY"
 
     header_list = header_list.strip() if header_list and header_list.strip() else None
+
+    # Escape delimiter for embedding in SQL string literal (only single-quote needs escaping)
+    delim_sql = delimiter.replace("'", "''")
 
     # --------------------------------------------------
     # DROP TABLES (ALWAYS)
@@ -118,7 +118,7 @@ def run(session: Session,
     """).collect()
 
     # --------------------------------------------------
-    # START TELEMETRY
+    # START TELEMETRY (11 cols, must match table)
     # --------------------------------------------------
     session.create_dataframe(
         [(
@@ -134,7 +134,8 @@ def run(session: Session,
     ).write.mode("append").save_as_table(telemetry_table)
 
     # --------------------------------------------------
-    # LOAD RAW CSV (entire line)
+    # LOAD RAW CSV (ENTIRE LINE AS STRING)
+    # FIELD_DELIMITER must differ from RECORD_DELIMITER, so use dummy \\u0001.
     # --------------------------------------------------
     session.sql(f"""
         COPY INTO {raw_table} (file_name, raw_row)
@@ -154,13 +155,13 @@ def run(session: Session,
     df = session.table(raw_table)
 
     # --------------------------------------------------
-    # ROW NUMBER
+    # ROW NUMBER PER FILE
     # --------------------------------------------------
     w = Window.partition_by(col("file_name")).order_by(col("load_ts"))
     df = df.with_column("rn", row_number().over(w))
 
     # --------------------------------------------------
-    # SAMPLE ROWS
+    # SAMPLE ROWS (raw)
     # --------------------------------------------------
     samples = df.select("raw_row").limit(2).collect()
     sample1 = samples[0][0] if samples else None
@@ -192,31 +193,29 @@ def run(session: Session,
         headers = [f"COL_{i+1}" for i in range(inferred)]
 
     # --------------------------------------------------
-    # SPLIT
-    # --------------------------------------------------
-    df = df.with_column("columns", split(col("raw_row"), lit(delimiter)))
-
-    # --------------------------------------------------
-    # CLEAN USING FLATTEN + ARRAY_AGG (UNIVERSAL)
+    # CLEAN USING FLATTEN + ARRAY_AGG WITHIN GROUP (ORDER BY ...)
+    # This avoids ARRAY_TRANSFORM (not available in your account).
     # --------------------------------------------------
     cleaned_df = session.sql(f"""
         SELECT
-            file_name,
+            t.file_name,
+            t.raw_row,
             ARRAY_AGG(
                 CASE
-                    WHEN value IS NULL OR value = '' OR UPPER(value) = 'NULL'
-                    THEN NULL
-                    ELSE REGEXP_REPLACE(value, '^"|"$', '')
+                    WHEN f.value IS NULL OR f.value::STRING = '' OR UPPER(f.value::STRING) = 'NULL'
+                        THEN NULL
+                    ELSE REGEXP_REPLACE(f.value::STRING, '^"|"$', '')
                 END
-                ORDER BY index
-            ) AS clean_columns
-        FROM {raw_table},
-             LATERAL FLATTEN(input => SPLIT(raw_row, '{delimiter}'))
-        GROUP BY file_name, raw_row
+            ) WITHIN GROUP (ORDER BY f.index) AS clean_columns
+        FROM {raw_table} t,
+             LATERAL FLATTEN(input => SPLIT(t.raw_row, '{delim_sql}')) f
+        GROUP BY
+            t.file_name,
+            t.raw_row
     """)
 
     # --------------------------------------------------
-    # FINAL LOAD
+    # FINAL LOAD (overwrite already ensured by DROP+CREATE)
     # --------------------------------------------------
     final_df = cleaned_df.select(
         col("file_name"),
@@ -228,7 +227,7 @@ def run(session: Session,
     record_count = final_df.count()
 
     # --------------------------------------------------
-    # END TELEMETRY
+    # END TELEMETRY (11 cols)
     # --------------------------------------------------
     session.create_dataframe(
         [(
@@ -244,8 +243,10 @@ def run(session: Session,
     ).write.mode("append").save_as_table(telemetry_table)
 
     return {
-        "version": "1.2.7",
+        "version": "1.2.8",
         "run_id": run_id,
+        "file_path": stage_path,
+        "target_table": target_table,
         "records_loaded": record_count,
         "status": "SUCCESS"
     }
