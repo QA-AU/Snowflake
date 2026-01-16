@@ -1,6 +1,6 @@
 /* ============================================================================
  PROCEDURE NAME  : STG.LOAD_CSV_GENERIC
- VERSION         : 1.2.5
+ VERSION         : 1.2.6
  CREATED ON      : 2026-01-16
 
  PURPOSE
@@ -27,7 +27,7 @@
  USER_PREFIX   : Prefix to isolate working tables
  STAGE_PATH    : External stage path to ONE CSV file
  TARGET_TABLE  : Final target table (WILL BE DROPPED)
- DELIMITER     : Column delimiter (| , ; ^ etc.)
+ DELIMITER     : Column delimiter (e.g. '¿', '|', ',', ';')
  HAS_HEADER    : TRUE if header is first row
  HEADER_LIST   : Optional comma-separated header list
 
@@ -53,8 +53,7 @@ AS
 $$
 from snowflake.snowpark import Session
 from snowflake.snowpark.functions import (
-    col, split, regexp_replace, size,
-    row_number, lit, expr
+    col, split, size, row_number, lit, expr
 )
 from snowflake.snowpark.window import Window
 import uuid
@@ -152,6 +151,9 @@ def run(session: Session,
 
     # --------------------------------------------------
     # LOAD RAW CSV (ENTIRE LINE AS STRING)
+    # NOTE:
+    # FIELD_DELIMITER uses a dummy char (\u0001) to avoid
+    # conflict with RECORD_DELIMITER.
     # --------------------------------------------------
     session.sql(f"""
         COPY INTO {raw_table} (file_name, raw_row)
@@ -161,7 +163,7 @@ def run(session: Session,
         )
         FILE_FORMAT = (
             TYPE = 'CSV'
-            FIELD_DELIMITER = '\\n'
+            FIELD_DELIMITER = '\\u0001'
             RECORD_DELIMITER = '\\n'
             SKIP_HEADER = 0
             FIELD_OPTIONALLY_ENCLOSED_BY = NONE
@@ -211,12 +213,12 @@ def run(session: Session,
         headers = [f"COL_{i+1}" for i in range(inferred_col_count)]
 
     # --------------------------------------------------
-    # SPLIT RAW ROW
+    # SPLIT RAW ROW USING USER DELIMITER (e.g. '¿')
     # --------------------------------------------------
     df = df.with_column("columns", split(col("raw_row"), lit(delimiter)))
 
     # --------------------------------------------------
-    # CLEAN USING PURE SQL (SAFE)
+    # CLEAN USING PURE SNOWFLAKE SQL
     # --------------------------------------------------
     df = df.with_column(
         "clean_columns",
@@ -278,7 +280,7 @@ def run(session: Session,
     end_df.write.mode("append").save_as_table(telemetry_table)
 
     return {
-        "version": "1.2.5",
+        "version": "1.2.6",
         "run_id": run_id,
         "file_path": stage_path,
         "target_table": target_table,
@@ -286,4 +288,3 @@ def run(session: Session,
         "status": "SUCCESS"
     }
 $$;
-
