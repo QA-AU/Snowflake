@@ -48,6 +48,43 @@ CALL STG.LOAD_CSV_GENERIC(
 
 
  ============================================================================ */
+/* ============================================================================
+ PROCEDURE NAME  : STG.LOAD_CSV_GENERIC
+ VERSION         : 1.2.2
+ CREATED ON      : 2026-01-16
+
+ PURPOSE
+ -------
+ Generic, defensive CSV ingestion stored procedure using Snowpark Python.
+ Loads ONE CSV file at a time from an external stage.
+
+ HARD RULE
+ ---------
+ On EVERY execution this procedure:
+   - DROPS
+   - RECREATES
+   - RELOADS
+
+ the following tables:
+   - STG.<USER_PREFIX>_RAW_CSV_LANDING
+   - STG.<USER_PREFIX>_CSV_LOAD_TELEMETRY
+   - <TARGET_TABLE>
+
+ Designed for deterministic reruns (QA / migration / reconciliation).
+
+ PARAMETERS
+ ----------
+ USER_PREFIX   : Prefix to isolate working tables
+ STAGE_PATH    : External stage path to ONE CSV file
+ TARGET_TABLE  : Final target table (WILL BE DROPPED)
+ DELIMITER     : Column delimiter (| , ; ^ etc.)
+ HAS_HEADER    : TRUE if header is first row
+ HEADER_LIST   : Optional comma-separated header list
+
+ RETURN VALUE
+ ------------
+ VARIANT with run_id, records_loaded, status
+ ============================================================================ */
 
 CREATE OR REPLACE PROCEDURE STG.LOAD_CSV_GENERIC(
     USER_PREFIX STRING,
@@ -67,7 +104,7 @@ $$
 from snowflake.snowpark import Session
 from snowflake.snowpark.functions import (
     col, split, regexp_replace, when, upper,
-    array_transform, size, row_number, lit, is_null
+    transform, size, row_number, lit, is_null
 )
 from snowflake.snowpark.window import Window
 import uuid
@@ -88,14 +125,14 @@ def run(session: Session,
     header_list = header_list.strip() if header_list and header_list.strip() else None
 
     # --------------------------------------------------
-    # DROP ALL TABLES (ALWAYS)
+    # DROP TABLES (ALWAYS)
     # --------------------------------------------------
     session.sql(f"DROP TABLE IF EXISTS {raw_table}").collect()
     session.sql(f"DROP TABLE IF EXISTS {telemetry_table}").collect()
     session.sql(f"DROP TABLE IF EXISTS {target_table}").collect()
 
     # --------------------------------------------------
-    # CREATE TABLES (FRESH)
+    # CREATE TABLES
     # --------------------------------------------------
     session.sql(f"""
         CREATE TABLE {raw_table} (
@@ -139,7 +176,7 @@ def run(session: Session,
     ])
 
     # --------------------------------------------------
-    # LOAD RAW CSV (FULL LINE AS STRING)
+    # LOAD RAW CSV (ENTIRE LINE AS STRING)
     # --------------------------------------------------
     session.sql(f"""
         COPY INTO {raw_table} (file_name, raw_row)
@@ -205,7 +242,7 @@ def run(session: Session,
 
     df = df.with_column(
         "clean_columns",
-        array_transform(
+        transform(
             col("columns"),
             lambda x: when(
                 is_null(x) | (x == '') | (upper(x) == 'NULL'),
@@ -236,7 +273,7 @@ def run(session: Session,
     ])
 
     return {
-        "version": "1.2.1",
+        "version": "1.2.2",
         "run_id": run_id,
         "file_path": stage_path,
         "target_table": target_table,
