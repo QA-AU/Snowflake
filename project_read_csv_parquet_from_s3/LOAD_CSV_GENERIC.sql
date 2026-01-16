@@ -1,6 +1,6 @@
 /* ============================================================================
  PROCEDURE NAME  : STG.LOAD_CSV_GENERIC
- VERSION         : 1.2.4
+ VERSION         : 1.2.5
  CREATED ON      : 2026-01-16
 
  PURPOSE
@@ -118,15 +118,34 @@ def run(session: Session,
     """).collect()
 
     # --------------------------------------------------
-    # START TELEMETRY (via DataFrame)
+    # START TELEMETRY (11 columns)
     # --------------------------------------------------
     start_df = session.create_dataframe(
-        [(run_id, "START", stage_path, target_table,
-          has_header, None, "RUNNING", None, None, None)],
+        [(
+            run_id,
+            "START",
+            stage_path,
+            target_table,
+            has_header,
+            None,
+            "RUNNING",
+            None,
+            None,
+            None,
+            None
+        )],
         schema=[
-            "RUN_ID", "EVENT_TYPE", "FILE_PATH", "TARGET_TABLE",
-            "HEADER_PRESENT", "RECORD_COUNT", "STATUS",
-            "SAMPLE_ROW_1", "SAMPLE_ROW_2", "HEADERS"
+            "RUN_ID",
+            "EVENT_TYPE",
+            "FILE_PATH",
+            "TARGET_TABLE",
+            "HEADER_PRESENT",
+            "RECORD_COUNT",
+            "STATUS",
+            "SAMPLE_ROW_1",
+            "SAMPLE_ROW_2",
+            "HEADERS",
+            "EVENT_TS"
         ]
     )
     start_df.write.mode("append").save_as_table(telemetry_table)
@@ -197,7 +216,7 @@ def run(session: Session,
     df = df.with_column("columns", split(col("raw_row"), lit(delimiter)))
 
     # --------------------------------------------------
-    # CLEAN USING PURE SQL (GUARANTEED)
+    # CLEAN USING PURE SQL (SAFE)
     # --------------------------------------------------
     df = df.with_column(
         "clean_columns",
@@ -226,22 +245,40 @@ def run(session: Session,
     record_count = final_df.count()
 
     # --------------------------------------------------
-    # END TELEMETRY (via DataFrame)
+    # END TELEMETRY (11 columns)
     # --------------------------------------------------
     end_df = session.create_dataframe(
-        [(run_id, "END", stage_path, target_table,
-          has_header, record_count, "SUCCESS",
-          sample1, sample2, headers)],
+        [(
+            run_id,
+            "END",
+            stage_path,
+            target_table,
+            has_header,
+            record_count,
+            "SUCCESS",
+            sample1,
+            sample2,
+            headers,
+            None
+        )],
         schema=[
-            "RUN_ID", "EVENT_TYPE", "FILE_PATH", "TARGET_TABLE",
-            "HEADER_PRESENT", "RECORD_COUNT", "STATUS",
-            "SAMPLE_ROW_1", "SAMPLE_ROW_2", "HEADERS"
+            "RUN_ID",
+            "EVENT_TYPE",
+            "FILE_PATH",
+            "TARGET_TABLE",
+            "HEADER_PRESENT",
+            "RECORD_COUNT",
+            "STATUS",
+            "SAMPLE_ROW_1",
+            "SAMPLE_ROW_2",
+            "HEADERS",
+            "EVENT_TS"
         ]
     )
     end_df.write.mode("append").save_as_table(telemetry_table)
 
     return {
-        "version": "1.2.4",
+        "version": "1.2.5",
         "run_id": run_id,
         "file_path": stage_path,
         "target_table": target_table,
@@ -249,3 +286,4 @@ def run(session: Session,
         "status": "SUCCESS"
     }
 $$;
+
