@@ -1,56 +1,6 @@
 /* ============================================================================
  PROCEDURE NAME  : STG.LOAD_CSV_GENERIC
- VERSION         : 1.2.1
- CREATED ON      : 2026-01-16
-
- PURPOSE
- -------
- Generic, defensive CSV ingestion stored procedure using Snowpark Python.
- Loads ONE CSV file at a time from an external stage.
-
- HARD RULE (IMPORTANT)
- ---------------------
- On EVERY execution this procedure:
-   - DROPS
-   - RECREATES
-   - RELOADS
-
- the following tables:
-   - STG.<USER_PREFIX>_RAW_CSV_LANDING
-   - STG.<USER_PREFIX>_CSV_LOAD_TELEMETRY
-   - <TARGET_TABLE>
-
- Designed for deterministic reruns (QA, migration, reconciliation).
-
- PARAMETERS
- ----------
- USER_PREFIX   : Prefix to isolate working tables
- STAGE_PATH    : External stage path to ONE CSV file
- TARGET_TABLE  : Final target table (WILL BE DROPPED)
- DELIMITER     : Column delimiter (| , ; ^ etc.)
- HAS_HEADER    : TRUE if header is first row
- HEADER_LIST   : Optional comma-separated header list
-
- RETURN VALUE
- ------------
- VARIANT with run_id, records_loaded, status
-
-CALL STG.LOAD_CSV_GENERIC(
-  'FIN',
-  '@MY_EXT_STAGE/inbound/customers.csv',
-  'STG.FIN_CSV_ARRAY_DATA',
-  '|',
-  FALSE,
-  'id,name,email,city'
-);
-
-
-
-
- ============================================================================ */
-/* ============================================================================
- PROCEDURE NAME  : STG.LOAD_CSV_GENERIC
- VERSION         : 1.2.2
+ VERSION         : 1.2.3
  CREATED ON      : 2026-01-16
 
  PURPOSE
@@ -104,7 +54,7 @@ $$
 from snowflake.snowpark import Session
 from snowflake.snowpark.functions import (
     col, split, regexp_replace, when, upper,
-    transform, size, row_number, lit, is_null
+    size, row_number, lit, expr
 )
 from snowflake.snowpark.window import Window
 import uuid
@@ -236,19 +186,25 @@ def run(session: Session,
         headers = [f"COL_{i+1}" for i in range(inferred_col_count)]
 
     # --------------------------------------------------
-    # SPLIT + CLEAN DATA
+    # SPLIT RAW ROW INTO ARRAY
     # --------------------------------------------------
     df = df.with_column("columns", split(col("raw_row"), lit(delimiter)))
 
+    # --------------------------------------------------
+    # CLEAN USING PURE SNOWFLAKE SQL (SAFE)
+    # --------------------------------------------------
     df = df.with_column(
         "clean_columns",
-        transform(
-            col("columns"),
-            lambda x: when(
-                is_null(x) | (x == '') | (upper(x) == 'NULL'),
-                None
-            ).otherwise(regexp_replace(x, '^"|"$', ''))
-        )
+        expr("""
+            ARRAY_TRANSFORM(
+                columns,
+                x -> CASE
+                        WHEN x IS NULL OR x = '' OR UPPER(x) = 'NULL'
+                        THEN NULL
+                        ELSE REGEXP_REPLACE(x, '^"|"$', '')
+                     END
+            )
+        """)
     )
 
     # --------------------------------------------------
@@ -273,7 +229,7 @@ def run(session: Session,
     ])
 
     return {
-        "version": "1.2.2",
+        "version": "1.2.3",
         "run_id": run_id,
         "file_path": stage_path,
         "target_table": target_table,
