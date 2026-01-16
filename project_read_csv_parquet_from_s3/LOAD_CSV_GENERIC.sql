@@ -1,6 +1,6 @@
 /* ============================================================================
  PROCEDURE NAME  : STG.LOAD_CSV_GENERIC
- VERSION         : 1.2.6
+ VERSION         : 1.2.7
  CREATED ON      : 2026-01-16
 
  PURPOSE
@@ -53,7 +53,8 @@ AS
 $$
 from snowflake.snowpark import Session
 from snowflake.snowpark.functions import (
-    col, split, size, row_number, lit, expr
+    col, split, size, row_number, lit,
+    regexp_replace, upper, when
 )
 from snowflake.snowpark.window import Window
 import uuid
@@ -117,43 +118,23 @@ def run(session: Session,
     """).collect()
 
     # --------------------------------------------------
-    # START TELEMETRY (11 columns)
+    # START TELEMETRY
     # --------------------------------------------------
-    start_df = session.create_dataframe(
+    session.create_dataframe(
         [(
-            run_id,
-            "START",
-            stage_path,
-            target_table,
-            has_header,
-            None,
-            "RUNNING",
-            None,
-            None,
-            None,
-            None
+            run_id, "START", stage_path, target_table,
+            has_header, None, "RUNNING",
+            None, None, None, None
         )],
         schema=[
-            "RUN_ID",
-            "EVENT_TYPE",
-            "FILE_PATH",
-            "TARGET_TABLE",
-            "HEADER_PRESENT",
-            "RECORD_COUNT",
-            "STATUS",
-            "SAMPLE_ROW_1",
-            "SAMPLE_ROW_2",
-            "HEADERS",
-            "EVENT_TS"
+            "RUN_ID","EVENT_TYPE","FILE_PATH","TARGET_TABLE",
+            "HEADER_PRESENT","RECORD_COUNT","STATUS",
+            "SAMPLE_ROW_1","SAMPLE_ROW_2","HEADERS","EVENT_TS"
         ]
-    )
-    start_df.write.mode("append").save_as_table(telemetry_table)
+    ).write.mode("append").save_as_table(telemetry_table)
 
     # --------------------------------------------------
-    # LOAD RAW CSV (ENTIRE LINE AS STRING)
-    # NOTE:
-    # FIELD_DELIMITER uses a dummy char (\u0001) to avoid
-    # conflict with RECORD_DELIMITER.
+    # LOAD RAW CSV (entire line)
     # --------------------------------------------------
     session.sql(f"""
         COPY INTO {raw_table} (file_name, raw_row)
@@ -166,7 +147,6 @@ def run(session: Session,
             FIELD_DELIMITER = '\\u0001'
             RECORD_DELIMITER = '\\n'
             SKIP_HEADER = 0
-            FIELD_OPTIONALLY_ENCLOSED_BY = NONE
             ERROR_ON_COLUMN_COUNT_MISMATCH = FALSE
         )
     """).collect()
@@ -174,7 +154,7 @@ def run(session: Session,
     df = session.table(raw_table)
 
     # --------------------------------------------------
-    # ROW NUMBER PER FILE
+    # ROW NUMBER
     # --------------------------------------------------
     w = Window.partition_by(col("file_name")).order_by(col("load_ts"))
     df = df.with_column("rn", row_number().over(w))
@@ -183,7 +163,7 @@ def run(session: Session,
     # SAMPLE ROWS
     # --------------------------------------------------
     samples = df.select("raw_row").limit(2).collect()
-    sample1 = samples[0][0] if len(samples) > 0 else None
+    sample1 = samples[0][0] if samples else None
     sample2 = samples[1][0] if len(samples) > 1 else None
 
     # --------------------------------------------------
@@ -193,51 +173,52 @@ def run(session: Session,
         headers = [h.strip() for h in header_list.split(",")]
 
     elif has_header:
-        header_row = (
+        headers = (
             df.filter(col("rn") == 1)
               .select(split(col("raw_row"), lit(delimiter)).alias("hdr"))
-              .collect()
+              .collect()[0]["HDR"]
         )
-        headers = header_row[0]["HDR"]
         df = df.filter(col("rn") > 1)
 
     else:
-        inferred_col_count = (
-            df.with_column("tmp_cols", split(col("raw_row"), lit(delimiter)))
-              .group_by(size(col("tmp_cols")).alias("cnt"))
+        inferred = (
+            df.with_column("tmp", split(col("raw_row"), lit(delimiter)))
+              .group_by(size(col("tmp")).alias("cnt"))
               .count()
               .order_by(col("count").desc())
               .limit(1)
               .collect()[0]["CNT"]
         )
-        headers = [f"COL_{i+1}" for i in range(inferred_col_count)]
+        headers = [f"COL_{i+1}" for i in range(inferred)]
 
     # --------------------------------------------------
-    # SPLIT RAW ROW USING USER DELIMITER (e.g. '¿')
+    # SPLIT
     # --------------------------------------------------
     df = df.with_column("columns", split(col("raw_row"), lit(delimiter)))
 
     # --------------------------------------------------
-    # CLEAN USING PURE SNOWFLAKE SQL
+    # CLEAN USING FLATTEN + ARRAY_AGG (UNIVERSAL)
     # --------------------------------------------------
-    df = df.with_column(
-        "clean_columns",
-        expr("""
-            ARRAY_TRANSFORM(
-                columns,
-                x -> CASE
-                        WHEN x IS NULL OR x = '' OR UPPER(x) = 'NULL'
-                        THEN NULL
-                        ELSE REGEXP_REPLACE(x, '^"|"$', '')
-                     END
-            )
-        """)
-    )
+    cleaned_df = session.sql(f"""
+        SELECT
+            file_name,
+            ARRAY_AGG(
+                CASE
+                    WHEN value IS NULL OR value = '' OR UPPER(value) = 'NULL'
+                    THEN NULL
+                    ELSE REGEXP_REPLACE(value, '^"|"$', '')
+                END
+                ORDER BY index
+            ) AS clean_columns
+        FROM {raw_table},
+             LATERAL FLATTEN(input => SPLIT(raw_row, '{delimiter}'))
+        GROUP BY file_name, raw_row
+    """)
 
     # --------------------------------------------------
     # FINAL LOAD
     # --------------------------------------------------
-    final_df = df.select(
+    final_df = cleaned_df.select(
         col("file_name"),
         lit(headers).alias("headers"),
         col("clean_columns").alias("data")
@@ -247,43 +228,24 @@ def run(session: Session,
     record_count = final_df.count()
 
     # --------------------------------------------------
-    # END TELEMETRY (11 columns)
+    # END TELEMETRY
     # --------------------------------------------------
-    end_df = session.create_dataframe(
+    session.create_dataframe(
         [(
-            run_id,
-            "END",
-            stage_path,
-            target_table,
-            has_header,
-            record_count,
-            "SUCCESS",
-            sample1,
-            sample2,
-            headers,
-            None
+            run_id, "END", stage_path, target_table,
+            has_header, record_count, "SUCCESS",
+            sample1, sample2, headers, None
         )],
         schema=[
-            "RUN_ID",
-            "EVENT_TYPE",
-            "FILE_PATH",
-            "TARGET_TABLE",
-            "HEADER_PRESENT",
-            "RECORD_COUNT",
-            "STATUS",
-            "SAMPLE_ROW_1",
-            "SAMPLE_ROW_2",
-            "HEADERS",
-            "EVENT_TS"
+            "RUN_ID","EVENT_TYPE","FILE_PATH","TARGET_TABLE",
+            "HEADER_PRESENT","RECORD_COUNT","STATUS",
+            "SAMPLE_ROW_1","SAMPLE_ROW_2","HEADERS","EVENT_TS"
         ]
-    )
-    end_df.write.mode("append").save_as_table(telemetry_table)
+    ).write.mode("append").save_as_table(telemetry_table)
 
     return {
-        "version": "1.2.6",
+        "version": "1.2.7",
         "run_id": run_id,
-        "file_path": stage_path,
-        "target_table": target_table,
         "records_loaded": record_count,
         "status": "SUCCESS"
     }
