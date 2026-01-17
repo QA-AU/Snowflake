@@ -1,0 +1,128 @@
+CREATE OR REPLACE PROCEDURE STG.LOAD_CSV_GENERIC(
+    STAGE_PATH   STRING,   -- e.g. '@MY_STAGE/path/file.csv'
+    TARGET_TABLE STRING,   -- e.g. 'STG.MY_TARGET'
+    DELIMITER    STRING,   -- e.g. '¿'
+    HAS_HEADER   BOOLEAN,  -- TRUE if first row is header
+    HEADER_LIST  STRING    -- optional: 'col1,col2,col3'
+)
+RETURNS STRING
+LANGUAGE SQL
+AS
+$$
+DECLARE
+    v_headers      STRING;
+    v_col_count    INTEGER;
+    v_cols_ddl     STRING;
+    v_file_format  STRING;
+    v_sql          STRING;
+BEGIN
+    /* ------------------------------------------------------------
+       1. Determine column names
+       Priority:
+         A) HEADER_LIST
+         B) File header (if HAS_HEADER = TRUE)
+         C) Auto-generate COL_1..COL_N
+    ------------------------------------------------------------ */
+
+    IF (HEADER_LIST IS NOT NULL AND LENGTH(TRIM(HEADER_LIST)) > 0) THEN
+        v_headers := REPLACE(TRIM(HEADER_LIST), ' ', '');
+
+    ELSEIF (HAS_HEADER) THEN
+        -- Read first line of file to get header
+        EXECUTE IMMEDIATE '
+            SELECT $1
+            FROM ' || STAGE_PATH || '
+            (FILE_FORMAT => (
+                TYPE=CSV
+                FIELD_DELIMITER=''' || DELIMITER || '''
+                FIELD_OPTIONALLY_ENCLOSED_BY=''"''
+                SKIP_HEADER=0
+            ))
+            LIMIT 1
+        ' INTO :v_headers;
+
+    ELSE
+        -- No headers anywhere → infer column count from first row
+        EXECUTE IMMEDIATE '
+            SELECT ARRAY_SIZE(SPLIT($1, ''' || DELIMITER || '''))
+            FROM ' || STAGE_PATH || '
+            (FILE_FORMAT => (
+                TYPE=CSV
+                FIELD_DELIMITER=''' || DELIMITER || '''
+                FIELD_OPTIONALLY_ENCLOSED_BY=''"''
+                SKIP_HEADER=0
+            ))
+            LIMIT 1
+        ' INTO :v_col_count;
+
+        -- Build COL_1, COL_2, ...
+        SELECT LISTAGG('COL_' || SEQ, ',')
+        INTO :v_headers
+        FROM TABLE(GENERATOR(ROWCOUNT => :v_col_count));
+    END IF;
+
+    /* ------------------------------------------------------------
+       2. Build CREATE TABLE DDL
+    ------------------------------------------------------------ */
+
+    v_cols_ddl := REPLACE(v_headers, ',', ' STRING,') || ' STRING';
+
+    EXECUTE IMMEDIATE 'DROP TABLE IF EXISTS ' || TARGET_TABLE;
+    EXECUTE IMMEDIATE 'CREATE TABLE ' || TARGET_TABLE || ' (' || v_cols_ddl || ')';
+
+    /* ------------------------------------------------------------
+       3. Create temp file format
+    ------------------------------------------------------------ */
+
+    v_file_format := 'FF_' || REPLACE(UUID_STRING(), '-', '_');
+
+    EXECUTE IMMEDIATE '
+        CREATE TEMP FILE FORMAT ' || v_file_format || '
+        TYPE=CSV
+        FIELD_DELIMITER=''' || DELIMITER || '''
+        FIELD_OPTIONALLY_ENCLOSED_BY=''"''
+        NULL_IF=(''NULL'','''')
+        EMPTY_FIELD_AS_NULL=TRUE
+        SKIP_HEADER=' || IFF(HAS_HEADER, '1', '0');
+
+    /* ------------------------------------------------------------
+       4. COPY INTO target table
+    ------------------------------------------------------------ */
+
+    EXECUTE IMMEDIATE '
+        COPY INTO ' || TARGET_TABLE || '
+        FROM ' || STAGE_PATH || '
+        FILE_FORMAT=(FORMAT_NAME=''' || v_file_format || ''')
+        ON_ERROR=''CONTINUE''
+    ';
+
+    RETURN 'SUCCESS: loaded data into ' || TARGET_TABLE;
+
+END;
+$$;
+
+
+CALL STG.LOAD_CSV_GENERIC(
+  '@MY_STAGE/legacy.csv',
+  'STG.FIN_DATA',
+  '¿',
+  TRUE,
+  NULL
+);
+
+
+CALL STG.LOAD_CSV_GENERIC(
+  '@MY_STAGE/legacy.csv',
+  'STG.FIN_DATA',
+  '¿',
+  FALSE,
+  'ID,NAME,EMAIL,CITY'
+);
+
+CALL STG.LOAD_CSV_GENERIC(
+  '@MY_STAGE/legacy.csv',
+  'STG.FIN_DATA',
+  '¿',
+  FALSE,
+  NULL
+);
