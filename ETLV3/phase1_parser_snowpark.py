@@ -119,7 +119,7 @@ def _strip_mandatory_marker(label):
 
 
 def _parse_single_sheet(filepath: str) -> list:
-    """Parse single-sheet Excel format - robust version that skips legend rows."""
+    """Parse single-sheet Excel format - with comprehensive debugging."""
     from openpyxl import load_workbook
     
     wb = load_workbook(filepath, data_only=True)
@@ -130,12 +130,26 @@ def _parse_single_sheet(filepath: str) -> list:
     in_column_section = False
     column_headers = []
     
+    print("
+" + "="*80)
+    print("EXCEL PARSE DEBUG - Starting")
+    print("="*80)
+    
     for row_idx, row in enumerate(ws.iter_rows(min_row=1), start=1):
         cell_a = _clean(row[0].value)
         cell_b = _clean(row[1].value) if len(row) > 1 else None
         
+        # Debug output for rows 34-50
+        if 34 <= row_idx <= 50:
+            all_values = [_clean(cell.value) for cell in row[:15]]
+            non_empty = [v for v in all_values if v]
+            print(f"
+Row {row_idx}: First cell='{cell_a}', Non-empty cells={len(non_empty)}")
+        
         # Check for MAPPING INFORMATION section
         if cell_a and cell_a.upper() == "MAPPING INFORMATION":
+            if row_idx >= 34:
+                print(f"  ACTION: Starting new mapping section")
             if current_mapping:
                 mappings.append(current_mapping)
             current_mapping = {"mapping_info": {}, "columns": [], "_start_row": row_idx}
@@ -144,17 +158,25 @@ def _parse_single_sheet(filepath: str) -> list:
         
         # Check for COLUMN MAPPINGS section
         if cell_a and "COLUMN" in cell_a.upper() and "MAPPING" in cell_a.upper():
+            if row_idx >= 34:
+                print(f"  ACTION: Entering column section")
             in_column_section = True
             column_headers = []
             continue
         
         # Skip empty rows
         if not cell_a:
+            if 37 <= row_idx <= 50 and in_column_section:
+                print(f"  ACTION: Skipped (empty first cell)")
             continue
             
         # Skip legend and color explanation rows
         cell_a_upper = cell_a.upper()
-        if any(keyword in cell_a_upper for keyword in ["GOLD", "BLUE", "MANDATORY", "OPTIONAL", "LEGEND"]):
+        skip_keywords = ["GOLD", "BLUE", "MANDATORY", "OPTIONAL", "LEGEND"]
+        if any(keyword in cell_a_upper for keyword in skip_keywords):
+            if row_idx >= 34:
+                matched = [k for k in skip_keywords if k in cell_a_upper]
+                print(f"  ACTION: Skipped (legend row, matched: {matched})")
             continue
         
         # Process mapping info fields
@@ -163,16 +185,25 @@ def _parse_single_sheet(filepath: str) -> list:
                 field_name = _strip_mandatory_marker(cell_a)
                 current_mapping["mapping_info"][field_name] = cell_b
         
-        # Get column headers (first real row after COLUMN MAPPINGS)
+        # Get column headers
         elif in_column_section and not column_headers:
-            # This row should be the headers
             headers_temp = [_strip_mandatory_marker(_clean(cell.value)) for cell in row if _clean(cell.value)]
-            # Verify we got actual column headers (check for expected names)
-            if headers_temp and any(h in ["source_table", "target_column", "transformationtype"] for h in headers_temp):
+            
+            if row_idx >= 34:
+                print(f"  CHECKING HEADERS: {headers_temp[:5]}...")
+            
+            # Verify we got actual column headers
+            expected = ["source_table", "target_column", "transformationtype"]
+            has_expected = any(h in expected for h in headers_temp)
+            
+            if headers_temp and has_expected:
                 column_headers = headers_temp
+                print(f"  ACTION: CONFIRMED {len(column_headers)} headers")
+                print(f"          Headers: {column_headers}")
                 continue
             else:
-                # Not the header row yet, skip
+                if row_idx >= 34:
+                    print(f"  ACTION: Not headers (missing expected columns)")
                 continue
         
         # Process column data rows
@@ -184,13 +215,39 @@ def _parse_single_sheet(filepath: str) -> list:
                     if val:
                         col_row[header] = val
             
-            # CRITICAL: Only require target_column to be present
-            # This allows empty source_table, source_column for system/hardcoded columns
+            if row_idx >= 37:
+                print(f"  DATA ROW: {len(col_row)} fields populated")
+                print(f"           target_column='{col_row.get('target_column', '(missing)')}'")
+                print(f"           Fields: {list(col_row.keys())[:5]}...")
+            
+            # Pick up row if it has target_column
             if col_row and col_row.get("target_column"):
+                if row_idx >= 37:
+                    print(f"  ACTION: ✅ PICKED UP (target='{col_row.get('target_column')}')")
                 current_mapping["columns"].append(col_row)
+            else:
+                if row_idx >= 37:
+                    if not col_row:
+                        print(f"  ACTION: ❌ SKIPPED (col_row is empty)")
+                    else:
+                        print(f"  ACTION: ❌ SKIPPED (no target_column)")
     
     if current_mapping:
         mappings.append(current_mapping)
+    
+    print("
+" + "="*80)
+    print("EXCEL PARSE DEBUG - Summary")
+    print("="*80)
+    for m_idx, m in enumerate(mappings, 1):
+        print(f"Mapping {m_idx}: {len(m['columns'])} columns parsed")
+        for c_idx, c in enumerate(m['columns'], 1):
+            src = c.get('source_column', '(empty)')
+            tgt = c.get('target_column', '(empty)')
+            tt = c.get('transformationtype', '?')
+            print(f"  {c_idx}. {src} -> {tgt} [{tt}]")
+    print("="*80 + "
+")
     
     return mappings
 
