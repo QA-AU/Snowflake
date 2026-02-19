@@ -164,11 +164,15 @@ Row {row_idx}: First cell='{cell_a}', Non-empty cells={len(non_empty)}")
             column_headers = []
             continue
         
-        # Skip empty rows
+        # Skip empty rows ONLY if we're not in column section with headers
+        # In column section, rows can have empty first cell (for system columns)
         if not cell_a:
-            if 37 <= row_idx <= 50 and in_column_section:
-                print(f"  ACTION: Skipped (empty first cell)")
-            continue
+            if not (in_column_section and column_headers):
+                # Not in column data section, safe to skip
+                if 37 <= row_idx <= 50:
+                    print(f"  ACTION: Skipped (empty first cell, not in column section)")
+                continue
+            # else: We're in column section with headers, DON'T skip - process the row
             
         # Skip legend and color explanation rows
         cell_a_upper = cell_a.upper()
@@ -575,7 +579,7 @@ def validate_and_generate(filepath: str) -> tuple:
             if not mapping_info.get(field):
                 errors.append(f"  Mapping {map_idx}: '{field}' is mandatory but empty.")
         
-        mid = mapping_info.get("mapping_id")
+        # mid already extracted earlier, just use it
         if mid:
             if mid in all_mapping_ids:
                 errors.append(f"  Mapping {map_idx}: Duplicate mapping_id '{mid}'.")
