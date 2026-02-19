@@ -147,15 +147,18 @@ def _parse_single_sheet(filepath: str) -> list:
             continue
         
         elif in_column_section and column_headers:
-            if cell_a:
-                col_row = {}
-                for col_idx, header in enumerate(column_headers):
-                    if col_idx < len(row):
-                        val = _clean(row[col_idx].value)
-                        if val:
-                            col_row[header] = val
-                if col_row:
-                    current_mapping["columns"].append(col_row)
+            # Build column row - allow empty source_table/source_column
+            col_row = {}
+            for col_idx, header in enumerate(column_headers):
+                if col_idx < len(row):
+                    val = _clean(row[col_idx].value)
+                    if val:
+                        col_row[header] = val
+            
+            # Only add row if it has at least target_column (key field)
+            # This allows empty source_column for system/hardcoded columns
+            if col_row and col_row.get("target_column"):
+                current_mapping["columns"].append(col_row)
     
     if current_mapping:
         mappings.append(current_mapping)
