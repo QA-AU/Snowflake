@@ -80,10 +80,15 @@ TABLE_MANDATORY = [
 ]
 
 COLUMN_MANDATORY = [
-    "source_table", "source_column", "source_keys",
-    "source_data_type", "target_column", "target_keys",
+    "target_column", "target_keys",
     "target_data_type", "transformationtype",
 ]
+
+# Optional fields that can be empty:
+# - source_table (for system/hardcoded columns)
+# - source_column (for system/hardcoded columns)
+# - source_keys (for non-PK columns)
+# - source_data_type (for system columns)
 
 # Note: source_column, source_table can be empty when transformationtype=SQL
 # This allows for system columns like CURRENT_TIMESTAMP(), hardcoded values, etc.
@@ -114,7 +119,7 @@ def _strip_mandatory_marker(label):
 
 
 def _parse_single_sheet(filepath: str) -> list:
-    """Parse single-sheet Excel format."""
+    """Parse single-sheet Excel format - robust version that skips legend rows."""
     from openpyxl import load_workbook
     
     wb = load_workbook(filepath, data_only=True)
@@ -129,6 +134,7 @@ def _parse_single_sheet(filepath: str) -> list:
         cell_a = _clean(row[0].value)
         cell_b = _clean(row[1].value) if len(row) > 1 else None
         
+        # Check for MAPPING INFORMATION section
         if cell_a and cell_a.upper() == "MAPPING INFORMATION":
             if current_mapping:
                 mappings.append(current_mapping)
@@ -136,25 +142,41 @@ def _parse_single_sheet(filepath: str) -> list:
             in_column_section = False
             continue
         
-        if cell_a and cell_a.upper() == "COLUMN MAPPINGS":
+        # Check for COLUMN MAPPINGS section
+        if cell_a and "COLUMN" in cell_a.upper() and "MAPPING" in cell_a.upper():
             in_column_section = True
             column_headers = []
             continue
         
-        if not cell_a or "GOLD" in (cell_a.upper() if cell_a else ""):
+        # Skip empty rows
+        if not cell_a:
+            continue
+            
+        # Skip legend and color explanation rows
+        cell_a_upper = cell_a.upper()
+        if any(keyword in cell_a_upper for keyword in ["GOLD", "BLUE", "MANDATORY", "OPTIONAL", "LEGEND"]):
             continue
         
+        # Process mapping info fields
         if current_mapping and not in_column_section:
             if cell_a:
                 field_name = _strip_mandatory_marker(cell_a)
                 current_mapping["mapping_info"][field_name] = cell_b
         
+        # Get column headers (first real row after COLUMN MAPPINGS)
         elif in_column_section and not column_headers:
-            column_headers = [_strip_mandatory_marker(_clean(cell.value)) for cell in row if _clean(cell.value)]
-            continue
+            # This row should be the headers
+            headers_temp = [_strip_mandatory_marker(_clean(cell.value)) for cell in row if _clean(cell.value)]
+            # Verify we got actual column headers (check for expected names)
+            if headers_temp and any(h in ["source_table", "target_column", "transformationtype"] for h in headers_temp):
+                column_headers = headers_temp
+                continue
+            else:
+                # Not the header row yet, skip
+                continue
         
+        # Process column data rows
         elif in_column_section and column_headers:
-            # Build column row - allow empty source_table/source_column
             col_row = {}
             for col_idx, header in enumerate(column_headers):
                 if col_idx < len(row):
@@ -162,8 +184,8 @@ def _parse_single_sheet(filepath: str) -> list:
                     if val:
                         col_row[header] = val
             
-            # Only add row if it has at least target_column (key field)
-            # This allows empty source_column for system/hardcoded columns
+            # CRITICAL: Only require target_column to be present
+            # This allows empty source_table, source_column for system/hardcoded columns
             if col_row and col_row.get("target_column"):
                 current_mapping["columns"].append(col_row)
     
@@ -463,6 +485,11 @@ def validate_and_generate(filepath: str) -> tuple:
     errors = []
     warnings = []
     
+    print("
+" + "="*60)
+    print("  PHASE 1: VALIDATION & SQL GENERATION")
+    print("="*60)
+    
     try:
         raw_mappings = _parse_single_sheet(filepath)
     except Exception as e:
@@ -471,6 +498,9 @@ def validate_and_generate(filepath: str) -> tuple:
     if not raw_mappings:
         raise ValidationError("No mappings found in Excel file.")
     
+    print(f"
+[PARSE] Found {len(raw_mappings)} mapping(s) in Excel")
+    
     result = []
     all_mapping_ids = set()
     
@@ -478,7 +508,12 @@ def validate_and_generate(filepath: str) -> tuple:
         mapping_info = raw_map["mapping_info"]
         columns = raw_map["columns"]
         
+        print(f"
+[PARSE] Mapping {map_idx}: Found {len(columns)} column(s)")
+        
         # Table-level validations
+        print(f"
+[VALIDATE] Mapping {map_idx} ({mid}): Table-level checks...")
         for field in TABLE_MANDATORY:
             if not mapping_info.get(field):
                 errors.append(f"  Mapping {map_idx}: '{field}' is mandatory but empty.")
@@ -537,26 +572,30 @@ def validate_and_generate(filepath: str) -> tuple:
                 errors.append(f"  Mapping {map_idx}: source_join references unknown tables: {', '.join(sorted(unknown))}.")
         
         # Column-level validations
+        print(f"[VALIDATE] Mapping {map_idx}: Column-level checks...")
         target_cols_seen = set()
         src_pk_rows = []
         tgt_pk_rows = []
         
         for col_idx, col in enumerate(columns, 1):
+            # Show progress for each column
+            tgt_col = col.get("target_column", "?")
+            src_col = col.get("source_column", "(empty)")
+            tt = (col.get("transformationtype") or "").upper()
+            print(f"  Column {col_idx}: {src_col} -> {tgt_col} [{tt}]")
             # Check if this is a system/hardcoded column
             tt = (col.get("transformationtype") or "").upper()
             is_system_column = (not col.get("source_column")) and (tt == "SQL")
             
             for field in COLUMN_MANDATORY:
-                # For system columns, allow empty source fields
-                if is_system_column and field in ("source_column", "source_table", "source_keys", "source_data_type"):
-                    continue
-                
-                # source_column can be empty if transformationtype=SQL
-                if field == "source_column":
-                    if not col.get(field) and tt != "SQL":
-                        errors.append(f"  Mapping {map_idx}, Column {col_idx}: 'source_column' is mandatory (unless transformationtype=SQL).")
-                elif not col.get(field):
+                # Check only the truly mandatory fields
+                if not col.get(field):
                     errors.append(f"  Mapping {map_idx}, Column {col_idx}: '{field}' is mandatory but empty.")
+            
+            # Additional conditional validations
+            # If transformationtype=COPY, source_column should be present
+            if tt == "COPY" and not col.get("source_column"):
+                warnings.append(f"  Mapping {map_idx}, Column {col_idx}: transformationtype=COPY but source_column is empty - consider using SQL.")
             
             for field in YN_COLUMN_FIELDS:
                 val = col.get(field)
@@ -600,6 +639,14 @@ def validate_and_generate(filepath: str) -> tuple:
             except Exception:
                 pass
         entry["columns"] = columns
+        
+        print(f"
+[VALIDATE] Mapping {map_idx}: Validation complete")
+        print(f"           Columns: {len(columns)}")
+        print(f"           Source PKs: {len(src_pk_rows)}")
+        print(f"           Target PKs: {len(tgt_pk_rows)}")
+        print(f"           Errors: {len([e for e in errors if f'Mapping {map_idx}' in e])}")
+        
         entry["source_sql"] = build_source_sql(entry) if not errors else ""
         entry["target_sql"] = build_target_sql(entry) if not errors else ""
         result.append(entry)
@@ -608,6 +655,16 @@ def validate_and_generate(filepath: str) -> tuple:
         err_block = "\n".join(errors)
         warn_block = ("\n\nWARNINGS:\n" + "\n".join(warnings)) if warnings else ""
         raise ValidationError(f"\n[ERROR] VALIDATION FAILED:\n\n{err_block}{warn_block}")
+    
+    # Validation summary
+    print("\n" + "="*60)
+    print("  VALIDATION SUMMARY")
+    print("="*60)
+    print(f"  Total Mappings: {len(result)}")
+    print(f"  Total Columns:  {sum(len(m['columns']) for m in result)}")
+    print(f"  Errors:         0")
+    print(f"  Warnings:       {len(warnings)}")
+    print("="*60)
     
     return result, warnings
 
