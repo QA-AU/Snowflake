@@ -1,0 +1,591 @@
+"""
+╔══════════════════════════════════════════════════════════════════════════════╗
+║              PHASE 1 — DATA INPUT PARSER (Snowpark Worksheet)                ║
+║                        (Single-Sheet Format)                                 ║
+╚══════════════════════════════════════════════════════════════════════════════╝
+
+VERSION:        1.0.0
+RELEASE DATE:   2026-02-18
+LANGUAGE:       Python 3.9+
+DEPENDENCIES:   pandas, openpyxl 
+
+HOW TO RUN IN SNOWFLAKE:
+  1. Upload Phase1_DataInput.xlsx to Snowflake stage
+     SQL> PUT file:///path/to/Phase1_DataInput.xlsx @stgintegration AUTO_COMPRESS=FALSE;
+  
+  2. Open a Snowpark Python worksheet in Snowsight
+  
+  3. Add packages (click "Packages" dropdown top-right):
+     - pandas
+     - openpyxl
+  
+  4. Paste this entire script into the worksheet
+  
+  5. Edit CONFIGURATION section below (lines 30-40)
+  
+  6. Click "Run" button
+
+OUTPUT:
+  - Writes to Snowflake table: DATABASE.SCHEMA.TABLE_NAME
+  - Table columns: mapping_id, run_timestamp, mapping_json, target_sql
+  - Console shows step-by-step progress and SQL generation
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+"""
+
+import json
+import math
+import re
+import tempfile
+import os
+import gzip
+import shutil
+
+import pandas as pd
+from snowflake.snowpark import Session
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# ⚙️  CONFIGURATION — EDIT THESE VALUES
+# ══════════════════════════════════════════════════════════════════════════════
+
+# INPUT: Snowflake stage path to Excel file
+STAGE_INPUT_PATH = "@stgintegration/Phase1_DataInput.xlsx"
+
+# OUTPUT: Snowflake table to write results
+OUTPUT_DATABASE = None              # None = use current database
+OUTPUT_SCHEMA   = "PUBLIC"          # Schema name
+OUTPUT_TABLE    = "PHASE1_MAPPING"  # Table name
+
+# BEHAVIOR
+WRITE_TO_TABLE = True               # Set False to skip table write (dry run)
+
+# ══════════════════════════════════════════════════════════════════════════════
+
+
+# ── Column definitions ────────────────────────────────────────────────────────
+
+TABLE_MANDATORY = [
+    "mapping_id", "db_name", "source_system", "source_schema",
+    "source_table", "target_schema", "target_table",
+    "scd2_applicable", "delete_flag_applicable",
+]
+
+COLUMN_MANDATORY = [
+    "source_table", "source_column", "source_keys",
+    "source_data_type", "target_column", "target_keys",
+    "target_data_type", "transformationtype",
+]
+
+YN_TABLE_FIELDS  = ["scd2_applicable", "delete_flag_applicable"]
+YN_COLUMN_FIELDS = ["source_keys", "target_keys"]
+TRANSFORMATION_TYPES = {"COPY", "SQL"}
+DEDUP_LOGIC_VALUES = {"KEEP_FIRST", "KEEP_LAST", "REJECT"}
+
+
+# ── Helpers ───────────────────────────────────────────────────────────────────
+
+class ValidationError(Exception):
+    pass
+
+
+def _clean(val):
+    if val is None or (isinstance(val, float) and math.isnan(val)):
+        return None
+    s = str(val).strip()
+    return s if s else None
+
+
+def _strip_mandatory_marker(label):
+    if not label:
+        return label
+    return label.replace(" (*)", "").replace("(*)", "").strip()
+
+
+def _parse_single_sheet(filepath: str) -> list:
+    """Parse single-sheet Excel format."""
+    from openpyxl import load_workbook
+    
+    wb = load_workbook(filepath, data_only=True)
+    ws = wb["MAPPING"]
+    
+    mappings = []
+    current_mapping = None
+    in_column_section = False
+    column_headers = []
+    
+    for row_idx, row in enumerate(ws.iter_rows(min_row=1), start=1):
+        cell_a = _clean(row[0].value)
+        cell_b = _clean(row[1].value) if len(row) > 1 else None
+        
+        if cell_a and cell_a.upper() == "MAPPING INFORMATION":
+            if current_mapping:
+                mappings.append(current_mapping)
+            current_mapping = {"mapping_info": {}, "columns": [], "_start_row": row_idx}
+            in_column_section = False
+            continue
+        
+        if cell_a and cell_a.upper() == "COLUMN MAPPINGS":
+            in_column_section = True
+            column_headers = []
+            continue
+        
+        if not cell_a or "GOLD" in (cell_a.upper() if cell_a else ""):
+            continue
+        
+        if current_mapping and not in_column_section:
+            if cell_a:
+                field_name = _strip_mandatory_marker(cell_a)
+                current_mapping["mapping_info"][field_name] = cell_b
+        
+        elif in_column_section and not column_headers:
+            column_headers = [_strip_mandatory_marker(_clean(cell.value)) for cell in row if _clean(cell.value)]
+            continue
+        
+        elif in_column_section and column_headers:
+            if cell_a:
+                col_row = {}
+                for col_idx, header in enumerate(column_headers):
+                    if col_idx < len(row):
+                        val = _clean(row[col_idx].value)
+                        if val:
+                            col_row[header] = val
+                if col_row:
+                    current_mapping["columns"].append(col_row)
+    
+    if current_mapping:
+        mappings.append(current_mapping)
+    
+    return mappings
+
+
+def _parse_table_aliases(join_clause: str) -> dict:
+    alias_map = {}
+    SQL_KEYWORDS = {
+        'LEFT','RIGHT','INNER','OUTER','CROSS','JOIN',
+        'ON','WHERE','AND','OR','SELECT','FROM','AS'
+    }
+    pattern = re.compile(
+        r'(?:FROM\s+|JOIN\s+)?(\w+)\s+(?:AS\s+)?(\w+)'
+        r'(?=\s+(?:LEFT|RIGHT|INNER|OUTER|CROSS|ON|WHERE|,|$)|\s*$)',
+        re.IGNORECASE
+    )
+    for m in pattern.finditer(join_clause):
+        tbl, alias = m.group(1).upper(), m.group(2).upper()
+        if tbl not in SQL_KEYWORDS and alias not in SQL_KEYWORDS:
+            alias_map[tbl] = alias
+    return alias_map
+
+
+def _parse_tables_from_join(join_clause: str) -> set:
+    SQL_KEYWORDS = {
+        'LEFT','RIGHT','INNER','OUTER','CROSS','JOIN',
+        'ON','WHERE','AND','OR','SELECT','FROM','AS'
+    }
+    tables = set()
+    for m in re.finditer(r'(?:FROM\s+|JOIN\s+)(\w+)', join_clause, re.IGNORECASE):
+        tbl = m.group(1).upper()
+        if tbl not in SQL_KEYWORDS:
+            tables.add(tbl)
+    return tables
+
+
+def _check_parens(val) -> bool:
+    if not isinstance(val, str):
+        return True
+    return val.count("(") == val.count(")")
+
+
+def _has_unescaped_quote(val) -> bool:
+    if not isinstance(val, str):
+        return False
+    return "'" in val.replace("''", "")
+
+
+def _inject_schema_into_join(join_clause: str, db: str, schema: str) -> str:
+    prefix = f"{db}.{schema}." if db else f"{schema}."
+    SQL_KEYWORDS = {
+        'LEFT','RIGHT','INNER','OUTER','CROSS','JOIN',
+        'ON','WHERE','AND','OR','SELECT','FROM','AS'
+    }
+    def replacer(m):
+        keyword = m.group(1)
+        tbl = m.group(2)
+        if tbl.upper() in SQL_KEYWORDS:
+            return m.group(0)
+        return f"{keyword}{prefix}{tbl}"
+    
+    result = re.sub(
+        r'((?:FROM|JOIN)\s+)(\w+)',
+        replacer,
+        join_clause,
+        flags=re.IGNORECASE
+    )
+    first = re.match(r'^(\w+)', result)
+    if first:
+        token = first.group(1)
+        if token.upper() not in SQL_KEYWORDS and not token.upper().startswith(db.upper() if db else schema.upper()):
+            result = prefix + result
+    return result
+
+
+def _clean_obj(obj):
+    if isinstance(obj, list):
+        return [_clean_obj(i) for i in obj]
+    if isinstance(obj, dict):
+        return {
+            k: _clean_obj(v) for k, v in obj.items()
+            if v is not None and not (isinstance(v, float) and math.isnan(v))
+        }
+    if isinstance(obj, float) and math.isnan(obj):
+        return None
+    return obj
+
+
+# ── SQL Generation ────────────────────────────────────────────────────────────
+
+def build_target_sql(mapping: dict) -> str:
+    mid = mapping.get("mapping_id", "?")
+    db = (mapping.get("db_name") or "").upper()
+    schema = (mapping.get("source_schema") or "").upper()
+    columns = mapping.get("columns", [])
+    join_clause = mapping.get("source_join", "") or ""
+    
+    alias_map = _parse_table_aliases(join_clause) if join_clause else {}
+    multi_table = bool(join_clause)
+    
+    print(f"\n{'═'*60}")
+    print(f"  Building SQL for mapping: {mid}")
+    print(f"{'═'*60}")
+    
+    select_lines = []
+    for col in columns:
+        src_table = (col.get("source_table") or "").upper()
+        src_col = col.get("source_column") or ""
+        tgt_col = col.get("target_column") or ""
+        tt = (col.get("transformationtype") or "").upper()
+        rule = col.get("transformationrule") or ""
+        override = col.get("source_column_override") or ""
+        default = col.get("source_default_value") or ""
+        
+        if tt == "SQL" and rule:
+            expr = rule if "." in rule else rule
+        elif override:
+            expr = override
+        else:
+            if multi_table and src_table in alias_map:
+                expr = f"{alias_map[src_table]}.{src_col}"
+            else:
+                expr = src_col
+        
+        if default:
+            try:
+                float(default)
+                expr = f"COALESCE({expr}, {default})"
+            except ValueError:
+                expr = f"COALESCE({expr}, '{default}')"
+        
+        select_lines.append(f"    {expr} AS {tgt_col}")
+    
+    select_clause = "SELECT\n" + ",\n".join(select_lines)
+    print(f"\n[SELECT]\n{select_clause}")
+    
+    if multi_table:
+        qualified_join = _inject_schema_into_join(join_clause, db, schema)
+        from_clause = f"FROM {qualified_join}"
+    else:
+        src_table_name = (mapping.get("source_table") or "").strip().upper()
+        alias = list(alias_map.values())[0] if alias_map else ""
+        alias_part = f" {alias}" if alias else ""
+        from_clause = f"FROM {db}.{schema}.{src_table_name}{alias_part}"
+    
+    print(f"\n[FROM]\n{from_clause}")
+    
+    filter_parts = []
+    for field in ["source_filter", "source_date_filter", "source_filter_other"]:
+        val = (mapping.get(field) or "").strip()
+        if val:
+            filter_parts.append(f"      {val}")
+    
+    where_clause = "WHERE\n" + "\nAND ".join(filter_parts) if filter_parts else ""
+    if where_clause:
+        print(f"\n[WHERE]\n{where_clause}")
+    else:
+        print("\n[WHERE] (none)")
+    
+    qualify_clause = ""
+    sample_set = mapping.get("sample_set")
+    if sample_set:
+        pk_exprs = []
+        for col in columns:
+            if (col.get("source_keys") or "").upper() == "Y":
+                src_table = (col.get("source_table") or "").upper()
+                src_col = col.get("source_column") or ""
+                override = col.get("source_column_override") or ""
+                tt = (col.get("transformationtype") or "").upper()
+                rule = col.get("transformationrule") or ""
+                if tt == "SQL" and rule:
+                    pk_exprs.append(rule if "." in rule else rule)
+                elif override:
+                    pk_exprs.append(override)
+                else:
+                    if multi_table and src_table in alias_map:
+                        pk_exprs.append(f"{alias_map[src_table]}.{src_col}")
+                    else:
+                        pk_exprs.append(src_col)
+        
+        if pk_exprs:
+            order_cols = ", ".join(pk_exprs)
+            qualify_clause = f"QUALIFY ROW_NUMBER() OVER (ORDER BY {order_cols}) <= {sample_set}"
+            print(f"\n[QUALIFY]\n{qualify_clause}")
+    
+    parts = [select_clause, from_clause]
+    if where_clause:
+        parts.append(where_clause)
+    if qualify_clause:
+        parts.append(qualify_clause)
+    
+    full_sql = "\n".join(parts)
+    print(f"\n[FULL SQL]\n{full_sql}")
+    print(f"\n{'─'*60}")
+    return full_sql
+
+
+# ── Validation ────────────────────────────────────────────────────────────────
+
+def validate_and_generate(filepath: str) -> tuple:
+    errors = []
+    warnings = []
+    
+    try:
+        raw_mappings = _parse_single_sheet(filepath)
+    except Exception as e:
+        raise ValidationError(f"Cannot parse Excel file: {e}")
+    
+    if not raw_mappings:
+        raise ValidationError("No mappings found in Excel file.")
+    
+    result = []
+    all_mapping_ids = set()
+    
+    for map_idx, raw_map in enumerate(raw_mappings, 1):
+        mapping_info = raw_map["mapping_info"]
+        columns = raw_map["columns"]
+        
+        # Table-level validations
+        for field in TABLE_MANDATORY:
+            if not mapping_info.get(field):
+                errors.append(f"  Mapping {map_idx}: '{field}' is mandatory but empty.")
+        
+        mid = mapping_info.get("mapping_id")
+        if mid:
+            if mid in all_mapping_ids:
+                errors.append(f"  Mapping {map_idx}: Duplicate mapping_id '{mid}'.")
+            all_mapping_ids.add(mid)
+        
+        for field in YN_TABLE_FIELDS:
+            val = mapping_info.get(field)
+            if val and val.upper() not in ("Y", "N"):
+                errors.append(f"  Mapping {map_idx}: '{field}' must be Y or N (got '{val}').")
+        
+        scd2 = (mapping_info.get("scd2_applicable") or "").upper()
+        if scd2 == "Y":
+            if not mapping_info.get("scd2_start_date_column"):
+                errors.append(f"  Mapping {map_idx}: scd2_start_date_column required when scd2_applicable=Y.")
+            if not mapping_info.get("scd2_end_date_column"):
+                errors.append(f"  Mapping {map_idx}: scd2_end_date_column required when scd2_applicable=Y.")
+        
+        ss = mapping_info.get("sample_set")
+        if ss:
+            try:
+                int(float(ss))
+            except ValueError:
+                errors.append(f"  Mapping {map_idx}: sample_set must be a positive integer (got '{ss}').")
+        
+        dedup = mapping_info.get("dedup_logic")
+        if dedup:
+            dedup_upper = dedup.upper()
+            if dedup_upper not in DEDUP_LOGIC_VALUES:
+                errors.append(f"  Mapping {map_idx}: dedup_logic must be KEEP_FIRST, KEEP_LAST, or REJECT (got '{dedup}').")
+        
+        lookup_table = mapping_info.get("source_lookup_table")
+        lookup_join = mapping_info.get("source_lookup_join_condition")
+        if lookup_table and not lookup_join:
+            warnings.append(f"  Mapping {map_idx}: source_lookup_table is set but source_lookup_join_condition is empty.")
+        if lookup_join and not lookup_table:
+            warnings.append(f"  Mapping {map_idx}: source_lookup_join_condition is set but source_lookup_table is empty.")
+        
+        source_tables_raw = mapping_info.get("source_table") or ""
+        source_tables = [t.strip().upper() for t in source_tables_raw.split(",") if t.strip()]
+        join_clause = mapping_info.get("source_join") or ""
+        
+        if len(source_tables) > 1 and not join_clause:
+            errors.append(f"  Mapping {map_idx}: Multiple source tables but source_join is empty.")
+        if len(source_tables) == 1 and join_clause:
+            warnings.append(f"  Mapping {map_idx}: Single source table but source_join is populated.")
+        
+        if join_clause and source_tables:
+            join_tables = _parse_tables_from_join(join_clause)
+            unknown = join_tables - set(source_tables)
+            if unknown:
+                errors.append(f"  Mapping {map_idx}: source_join references unknown tables: {', '.join(sorted(unknown))}.")
+        
+        # Column-level validations
+        target_cols_seen = set()
+        src_pk_rows = []
+        tgt_pk_rows = []
+        
+        for col_idx, col in enumerate(columns, 1):
+            for field in COLUMN_MANDATORY:
+                if not col.get(field):
+                    errors.append(f"  Mapping {map_idx}, Column {col_idx}: '{field}' is mandatory but empty.")
+            
+            for field in YN_COLUMN_FIELDS:
+                val = col.get(field)
+                if val and val.upper() not in ("Y", "N"):
+                    errors.append(f"  Mapping {map_idx}, Column {col_idx}: '{field}' must be Y or N.")
+            
+            tt = (col.get("transformationtype") or "").upper()
+            rule = col.get("transformationrule")
+            if tt and tt not in TRANSFORMATION_TYPES:
+                errors.append(f"  Mapping {map_idx}, Column {col_idx}: transformationtype must be COPY or SQL.")
+            if tt == "SQL" and not rule:
+                errors.append(f"  Mapping {map_idx}, Column {col_idx}: transformationrule required when transformationtype=SQL.")
+            
+            target_col = col.get("target_column")
+            if target_col:
+                if target_col in target_cols_seen:
+                    errors.append(f"  Mapping {map_idx}, Column {col_idx}: Duplicate target_column '{target_col}'.")
+                target_cols_seen.add(target_col)
+            
+            col_src_table = (col.get("source_table") or "").upper()
+            if col_src_table and col_src_table not in source_tables:
+                errors.append(f"  Mapping {map_idx}, Column {col_idx}: source_table '{col_src_table}' not in mapping source tables.")
+            
+            if (col.get("source_keys") or "").upper() == "Y":
+                src_pk_rows.append(col)
+            if (col.get("target_keys") or "").upper() == "Y":
+                tgt_pk_rows.append(col)
+        
+        # Cross-field validations
+        if not src_pk_rows:
+            errors.append(f"  Mapping {map_idx}: No source_keys=Y column found — at least one required.")
+        if not tgt_pk_rows:
+            errors.append(f"  Mapping {map_idx}: No target_keys=Y column found — at least one required.")
+        
+        if ss and not src_pk_rows:
+            errors.append(f"  Mapping {map_idx}: sample_set set but no source PK columns — cannot build QUALIFY.")
+        
+        # Build final mapping object
+        entry = dict(mapping_info)
+        if entry.get("sample_set"):
+            try:
+                entry["sample_set"] = int(float(entry["sample_set"]))
+            except Exception:
+                pass
+        entry["columns"] = columns
+        entry["target_sql"] = build_target_sql(entry) if not errors else ""
+        result.append(entry)
+    
+    if errors:
+        err_block = "\n".join(errors)
+        warn_block = ("\n\nWARNINGS:\n" + "\n".join(warnings)) if warnings else ""
+        raise ValidationError(f"\n❌ VALIDATION FAILED:\n\n{err_block}{warn_block}")
+    
+    return result, warnings
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# SNOWPARK MAIN — Entry point for Snowflake worksheet
+# ══════════════════════════════════════════════════════════════════════════════
+
+def main(session: Session):
+    """
+    Snowpark worksheet entry point.
+    Automatically called by Snowsight when you click Run.
+    """
+    log = []
+    
+    # Step 1: Download Excel from stage
+    log.append(f"[STEP 1] Downloading {STAGE_INPUT_PATH} from stage...")
+    tmp_dir = tempfile.mkdtemp()
+    
+    try:
+        session.file.get(STAGE_INPUT_PATH, tmp_dir)
+    except Exception as e:
+        raise Exception(f"Cannot download from stage {STAGE_INPUT_PATH}: {e}")
+    
+    downloaded = [f for f in os.listdir(tmp_dir) if f.endswith((".xlsx", ".xls", ".gz"))]
+    if not downloaded:
+        raise Exception(f"File not found after GET from stage: {STAGE_INPUT_PATH}")
+    
+    local_path = os.path.join(tmp_dir, downloaded[0])
+    if local_path.endswith(".gz"):
+        unzipped = local_path.replace(".gz", "")
+        with gzip.open(local_path, "rb") as f_in, open(unzipped, "wb") as f_out:
+            shutil.copyfileobj(f_in, f_out)
+        local_path = unzipped
+    
+    log.append(f"[STEP 1] Downloaded: {local_path}  ✅")
+    
+    # Step 2: Validate and generate SQL
+    log.append("[STEP 2] Validating, parsing, and generating SQL...")
+    try:
+        data, warnings = validate_and_generate(local_path)
+    except ValidationError as e:
+        raise Exception(str(e))
+    
+    log.append(f"[STEP 2] Parsed {len(data)} mapping(s) successfully  ✅")
+    for w in warnings:
+        log.append(f"  ⚠️  {w}")
+    
+    # Step 3: Serialize to JSON
+    json_str = json.dumps(_clean_obj(data), indent=2, default=str)
+    log.append(f"[STEP 3] JSON serialized — {len(json_str):,} characters  ✅")
+    
+    # Step 4: Write to Snowflake table
+    if WRITE_TO_TABLE:
+        db_prefix = f"{OUTPUT_DATABASE}." if OUTPUT_DATABASE else ""
+        full_table = f"{db_prefix}{OUTPUT_SCHEMA}.{OUTPUT_TABLE}"
+        log.append(f"[STEP 4] Writing to {full_table}...")
+        
+        # Create or replace table
+        session.sql(f"""
+            CREATE TABLE IF NOT EXISTS {full_table} (
+                mapping_id       VARCHAR,
+                run_timestamp    TIMESTAMP_NTZ DEFAULT CURRENT_TIMESTAMP(),
+                mapping_json     VARIANT,
+                target_sql       VARCHAR
+            )
+        """).collect()
+        
+        # Insert each mapping
+        for mapping in data:
+            mid = mapping.get("mapping_id", "UNKNOWN")
+            target_sql = (mapping.get("target_sql") or "").replace("'", "\\'")
+            row_json = json.dumps(_clean_obj(mapping), default=str).replace("'", "\\'")
+            
+            session.sql(f"""
+                INSERT INTO {full_table}
+                    (mapping_id, mapping_json, target_sql)
+                SELECT
+                    '{mid}',
+                    PARSE_JSON('{row_json}'),
+                    '{target_sql}'
+            """).collect()
+        
+        log.append(f"[STEP 4] {len(data)} row(s) inserted into {full_table}  ✅")
+        log.append(f"         Query table: SELECT * FROM {full_table};")
+    
+    # Summary
+    log.append("")
+    log.append("══════════════════════════════════════════")
+    log.append(f"  ✅ PHASE 1 COMPLETE — {len(data)} mapping(s)")
+    log.append("══════════════════════════════════════════")
+    if WRITE_TO_TABLE:
+        log.append(f"  Table: {db_prefix}{OUTPUT_SCHEMA}.{OUTPUT_TABLE}")
+    log.append(f"  Warnings: {len(warnings)}")
+    log.append(f"  Status: SUCCESS")
+    log.append("══════════════════════════════════════════")
+    
+    return "\n".join(log)
