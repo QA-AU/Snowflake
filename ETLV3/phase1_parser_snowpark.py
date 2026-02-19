@@ -1,7 +1,7 @@
 """
 ================================================================================
               PHASE 1 - DATA INPUT PARSER (Snowpark Worksheet)
-                        (Single-Sheet Format) 
+                        (Single-Sheet Format)
 ================================================================================
 
 VERSION:        1.1.3
@@ -130,10 +130,9 @@ def _parse_single_sheet(filepath: str) -> list:
     in_column_section = False
     column_headers = []
     
-    print("
-" + "="*80)
+    print("" + "="*80)
     print("EXCEL PARSE DEBUG - Starting")
-    print("="*80)
+    print("=" * 80)
     
     for row_idx, row in enumerate(ws.iter_rows(min_row=1), start=1):
         cell_a = _clean(row[0].value)
@@ -143,8 +142,7 @@ def _parse_single_sheet(filepath: str) -> list:
         if 34 <= row_idx <= 50:
             all_values = [_clean(cell.value) for cell in row[:15]]
             non_empty = [v for v in all_values if v]
-            print(f"
-Row {row_idx}: First cell='{cell_a}', Non-empty cells={len(non_empty)}")
+            print(f"Row {row_idx}: First cell='{cell_a}', Non-empty cells={len(non_empty)}")
         
         # Check for MAPPING INFORMATION section
         if cell_a and cell_a.upper() == "MAPPING INFORMATION":
@@ -174,14 +172,15 @@ Row {row_idx}: First cell='{cell_a}', Non-empty cells={len(non_empty)}")
                 continue
             # else: We're in column section with headers, DON'T skip - process the row
             
-        # Skip legend and color explanation rows
-        cell_a_upper = cell_a.upper()
-        skip_keywords = ["GOLD", "BLUE", "MANDATORY", "OPTIONAL", "LEGEND"]
-        if any(keyword in cell_a_upper for keyword in skip_keywords):
-            if row_idx >= 34:
-                matched = [k for k in skip_keywords if k in cell_a_upper]
-                print(f"  ACTION: Skipped (legend row, matched: {matched})")
-            continue
+        # Skip legend and color explanation rows (only check if cell_a has value)
+        if cell_a:
+            cell_a_upper = cell_a.upper()
+            skip_keywords = ["GOLD", "BLUE", "MANDATORY", "OPTIONAL", "LEGEND"]
+            if any(keyword in cell_a_upper for keyword in skip_keywords):
+                if row_idx >= 34:
+                    matched = [k for k in skip_keywords if k in cell_a_upper]
+                    print(f"  ACTION: Skipped (legend row, matched: {matched})")
+                continue
         
         # Process mapping info fields
         if current_mapping and not in_column_section:
@@ -239,10 +238,9 @@ Row {row_idx}: First cell='{cell_a}', Non-empty cells={len(non_empty)}")
     if current_mapping:
         mappings.append(current_mapping)
     
-    print("
-" + "="*80)
+    print("\n" + "=" * 80)
     print("EXCEL PARSE DEBUG - Summary")
-    print("="*80)
+    print("=" * 80)
     for m_idx, m in enumerate(mappings, 1):
         print(f"Mapping {m_idx}: {len(m['columns'])} columns parsed")
         for c_idx, c in enumerate(m['columns'], 1):
@@ -250,8 +248,7 @@ Row {row_idx}: First cell='{cell_a}', Non-empty cells={len(non_empty)}")
             tgt = c.get('target_column', '(empty)')
             tt = c.get('transformationtype', '?')
             print(f"  {c_idx}. {src} -> {tgt} [{tt}]")
-    print("="*80 + "
-")
+    print("=" * 80 + "\n")
     
     return mappings
 
@@ -546,10 +543,9 @@ def validate_and_generate(filepath: str) -> tuple:
     errors = []
     warnings = []
     
-    print("
-" + "="*60)
+    print("" + "="*60)
     print("  PHASE 1: VALIDATION & SQL GENERATION")
-    print("="*60)
+    print("=" * 60)
     
     try:
         raw_mappings = _parse_single_sheet(filepath)
@@ -559,8 +555,7 @@ def validate_and_generate(filepath: str) -> tuple:
     if not raw_mappings:
         raise ValidationError("No mappings found in Excel file.")
     
-    print(f"
-[PARSE] Found {len(raw_mappings)} mapping(s) in Excel")
+    print(f"[PARSE] Found {len(raw_mappings)} mapping(s) in Excel")
     
     result = []
     all_mapping_ids = set()
@@ -569,12 +564,10 @@ def validate_and_generate(filepath: str) -> tuple:
         mapping_info = raw_map["mapping_info"]
         columns = raw_map["columns"]
         
-        print(f"
-[PARSE] Mapping {map_idx}: Found {len(columns)} column(s)")
+        print(f"[PARSE] Mapping {map_idx}: Found {len(columns)} column(s)")
         
         # Table-level validations
-        print(f"
-[VALIDATE] Mapping {map_idx} ({mid}): Table-level checks...")
+        print(f"[VALIDATE] Mapping {map_idx} ({mid}): Table-level checks...")
         for field in TABLE_MANDATORY:
             if not mapping_info.get(field):
                 errors.append(f"  Mapping {map_idx}: '{field}' is mandatory but empty.")
@@ -701,8 +694,7 @@ def validate_and_generate(filepath: str) -> tuple:
                 pass
         entry["columns"] = columns
         
-        print(f"
-[VALIDATE] Mapping {map_idx}: Validation complete")
+        print(f"[VALIDATE] Mapping {map_idx}: Validation complete")
         print(f"           Columns: {len(columns)}")
         print(f"           Source PKs: {len(src_pk_rows)}")
         print(f"           Target PKs: {len(tgt_pk_rows)}")
@@ -718,14 +710,14 @@ def validate_and_generate(filepath: str) -> tuple:
         raise ValidationError(f"\n[ERROR] VALIDATION FAILED:\n\n{err_block}{warn_block}")
     
     # Validation summary
-    print("\n" + "="*60)
+    print("\n" + "=" * 60)
     print("  VALIDATION SUMMARY")
-    print("="*60)
+    print("=" * 60)
     print(f"  Total Mappings: {len(result)}")
     print(f"  Total Columns:  {sum(len(m['columns']) for m in result)}")
     print(f"  Errors:         0")
     print(f"  Warnings:       {len(warnings)}")
-    print("="*60)
+    print("=" * 60)
     
     return result, warnings
 
