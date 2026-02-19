@@ -1,12 +1,12 @@
 """
-╔══════════════════════════════════════════════════════════════════════════════╗
-║              PHASE 1 — DATA INPUT PARSER (Snowpark Worksheet)                ║
-║                        (Single-Sheet Format)                                 ║
-╚══════════════════════════════════════════════════════════════════════════════╝
+================================================================================
+              PHASE 1 - DATA INPUT PARSER (Snowpark Worksheet)
+                        (Single-Sheet Format)
+================================================================================
 
-VERSION:        1.0.0
-RELEASE DATE:   2026-02-18
-AUTHOR:         Data Engineering Team
+VERSION:        1.1.0
+RELEASE DATE:   2026-02-19
+AUTHOR:         QA
 LANGUAGE:       Python 3.9+
 DEPENDENCIES:   pandas, openpyxl (install via Packages menu in Snowsight)
 
@@ -31,7 +31,7 @@ OUTPUT:
   - Table columns: mapping_id, run_timestamp, mapping_json, target_sql
   - Console shows step-by-step progress and SQL generation
 
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+==============================================================================
 """
 
 import json
@@ -46,9 +46,9 @@ import pandas as pd
 from snowflake.snowpark import Session
 
 
-# ══════════════════════════════════════════════════════════════════════════════
-# ⚙️  CONFIGURATION — EDIT THESE VALUES
-# ══════════════════════════════════════════════════════════════════════════════
+# ==============================================================================
+# [CONFIG]  CONFIGURATION   EDIT THESE VALUES
+# ==============================================================================
 
 # INPUT: Snowflake stage path to Excel file
 STAGE_INPUT_PATH = "@stgintegration/Phase1_DataInput.xlsx"
@@ -61,10 +61,10 @@ OUTPUT_TABLE    = "PHASE1_MAPPING"  # Table name
 # BEHAVIOR
 WRITE_TO_TABLE = True               # Set False to skip table write (dry run)
 
-# ══════════════════════════════════════════════════════════════════════════════
+# ==============================================================================
 
 
-# ── Column definitions ────────────────────────────────────────────────────────
+# -- Column definitions --------------------------------------------------------
 
 TABLE_MANDATORY = [
     "mapping_id", "db_name", "source_system", "source_schema",
@@ -84,7 +84,7 @@ TRANSFORMATION_TYPES = {"COPY", "SQL"}
 DEDUP_LOGIC_VALUES = {"KEEP_FIRST", "KEEP_LAST", "REJECT"}
 
 
-# ── Helpers ───────────────────────────────────────────────────────────────────
+# -- Helpers -------------------------------------------------------------------
 
 class ValidationError(Exception):
     pass
@@ -243,7 +243,7 @@ def _clean_obj(obj):
     return obj
 
 
-# ── SQL Generation ────────────────────────────────────────────────────────────
+# -- SQL Generation ------------------------------------------------------------
 
 def build_target_sql(mapping: dict) -> str:
     mid = mapping.get("mapping_id", "?")
@@ -255,9 +255,9 @@ def build_target_sql(mapping: dict) -> str:
     alias_map = _parse_table_aliases(join_clause) if join_clause else {}
     multi_table = bool(join_clause)
     
-    print(f"\n{'═'*60}")
+    print(f"\n{'='*60}")
     print(f"  Building SQL for mapping: {mid}")
-    print(f"{'═'*60}")
+    print(f"{'='*60}")
     
     select_lines = []
     for col in columns:
@@ -279,12 +279,33 @@ def build_target_sql(mapping: dict) -> str:
             else:
                 expr = src_col
         
+        # Apply default value
         if default:
             try:
                 float(default)
                 expr = f"COALESCE({expr}, {default})"
             except ValueError:
                 expr = f"COALESCE({expr}, '{default}')"
+        
+        # Auto-cast if source and target data types differ
+        src_dtype = (col.get("source_data_type") or "").upper()
+        tgt_dtype = (col.get("target_data_type") or "").upper()
+        
+        if src_dtype and tgt_dtype and src_dtype != tgt_dtype:
+            # Only apply casting for COPY or simple expressions (not SQL transformations)
+            if tt != "SQL" or not rule:
+                if "DATE" in tgt_dtype and "DATE" not in src_dtype:
+                    expr = f"TRY_TO_DATE({expr})"
+                elif "TIMESTAMP" in tgt_dtype and "TIMESTAMP" not in src_dtype:
+                    expr = f"TRY_TO_TIMESTAMP({expr})"
+                elif "NUMBER" in tgt_dtype or "NUMERIC" in tgt_dtype or "DECIMAL" in tgt_dtype:
+                    expr = f"TRY_TO_NUMBER({expr})"
+                elif "INTEGER" in tgt_dtype or "INT" in tgt_dtype or "BIGINT" in tgt_dtype:
+                    expr = f"TRY_TO_NUMBER({expr})"
+                elif "VARCHAR" in tgt_dtype or "STRING" in tgt_dtype or "TEXT" in tgt_dtype:
+                    expr = f"TO_VARCHAR({expr})"
+                elif "BOOLEAN" in tgt_dtype or "BOOL" in tgt_dtype:
+                    expr = f"TRY_TO_BOOLEAN({expr})"
         
         select_lines.append(f"    {expr} AS {tgt_col}")
     
@@ -348,11 +369,75 @@ def build_target_sql(mapping: dict) -> str:
     
     full_sql = "\n".join(parts)
     print(f"\n[FULL SQL]\n{full_sql}")
-    print(f"\n{'─'*60}")
+    print(f"\n{'-'*60}")
     return full_sql
 
 
-# ── Validation ────────────────────────────────────────────────────────────────
+
+
+def build_target_table_sql(mapping: dict) -> str:
+    """
+    Build SQL to query the TARGET table (for comparison/validation).
+    Uses target_table, target_join, target_filter, etc.
+    """
+    mid = mapping.get("mapping_id", "?")
+    db = (mapping.get("db_name") or "").upper()
+    schema = (mapping.get("target_schema") or "").upper()
+    table = (mapping.get("target_table") or "").upper()
+    columns = mapping.get("columns", [])
+    join_clause = mapping.get("target_join", "") or ""
+    
+    print(f"\n{'='*60}")
+    print(f"  Building TARGET SQL for mapping: {mid}")
+    print(f"{'='*60}")
+    
+    # SELECT - use target column names
+    select_lines = []
+    for col in columns:
+        tgt_col = col.get("target_column") or ""
+        if tgt_col:
+            select_lines.append(f"    {tgt_col}")
+    
+    if not select_lines:
+        select_lines.append("    *")
+    
+    select_clause = "SELECT\n" + ",\n".join(select_lines)
+    print(f"\n[SELECT]\n{select_clause}")
+    
+    # FROM
+    if join_clause:
+        # If target_join is specified, use it
+        from_clause = f"FROM {db}.{schema}.{join_clause}"
+    else:
+        from_clause = f"FROM {db}.{schema}.{table}"
+    
+    print(f"\n[FROM]\n{from_clause}")
+    
+    # WHERE - combine target filters
+    filter_parts = []
+    for field in ["target_filter", "target_date_filter", "target_filter_other"]:
+        val = (mapping.get(field) or "").strip()
+        if val:
+            filter_parts.append(f"      {val}")
+    
+    where_clause = "WHERE\n" + "\nAND ".join(filter_parts) if filter_parts else ""
+    if where_clause:
+        print(f"\n[WHERE]\n{where_clause}")
+    else:
+        print("\n[WHERE] (none)")
+    
+    # Assemble
+    parts = [select_clause, from_clause]
+    if where_clause:
+        parts.append(where_clause)
+    
+    full_sql = "\n".join(parts)
+    print(f"\n[FULL TARGET SQL]\n{full_sql}")
+    print(f"\n{'-'*60}")
+    return full_sql
+
+
+# -- Validation ----------------------------------------------------------------
 
 def validate_and_generate(filepath: str) -> tuple:
     errors = []
@@ -485,20 +570,21 @@ def validate_and_generate(filepath: str) -> tuple:
             except Exception:
                 pass
         entry["columns"] = columns
-        entry["target_sql"] = build_target_sql(entry) if not errors else ""
+        entry["source_sql"] = build_target_sql(entry) if not errors else ""
+        entry["target_sql"] = build_target_table_sql(entry) if not errors else ""
         result.append(entry)
     
     if errors:
         err_block = "\n".join(errors)
         warn_block = ("\n\nWARNINGS:\n" + "\n".join(warnings)) if warnings else ""
-        raise ValidationError(f"\n❌ VALIDATION FAILED:\n\n{err_block}{warn_block}")
+        raise ValidationError(f"\n[ERROR] VALIDATION FAILED:\n\n{err_block}{warn_block}")
     
     return result, warnings
 
 
-# ══════════════════════════════════════════════════════════════════════════════
-# SNOWPARK MAIN — Entry point for Snowflake worksheet
-# ══════════════════════════════════════════════════════════════════════════════
+# ==============================================================================
+# SNOWPARK MAIN   Entry point for Snowflake worksheet
+# ==============================================================================
 
 def main(session: Session):
     """
@@ -527,7 +613,7 @@ def main(session: Session):
             shutil.copyfileobj(f_in, f_out)
         local_path = unzipped
     
-    log.append(f"[STEP 1] Downloaded: {local_path}  ✅")
+    log.append(f"[STEP 1] Downloaded: {local_path}  [OK]")
     
     # Step 2: Validate and generate SQL
     log.append("[STEP 2] Validating, parsing, and generating SQL...")
@@ -536,13 +622,13 @@ def main(session: Session):
     except ValidationError as e:
         raise Exception(str(e))
     
-    log.append(f"[STEP 2] Parsed {len(data)} mapping(s) successfully  ✅")
+    log.append(f"[STEP 2] Parsed {len(data)} mapping(s) successfully [OK]")
     for w in warnings:
-        log.append(f"  ⚠️  {w}")
+        log.append(f"  [WARNING]  {w}")
     
     # Step 3: Serialize to JSON
     json_str = json.dumps(_clean_obj(data), indent=2, default=str)
-    log.append(f"[STEP 3] JSON serialized — {len(json_str):,} characters  ✅")
+    log.append(f"[STEP 3] JSON serialized — {len(json_str):,} characters  [OK]")
     
     # Step 4: Write to Snowflake table
     if WRITE_TO_TABLE:
@@ -560,6 +646,7 @@ def main(session: Session):
                 mapping_id       VARCHAR,
                 run_timestamp    TIMESTAMP_NTZ,
                 mapping_json     VARIANT,
+                source_sql       VARCHAR,
                 target_sql       VARCHAR
             )
         """).collect()
@@ -570,6 +657,7 @@ def main(session: Session):
             rows.append((
                 mapping.get("mapping_id", "UNKNOWN"),
                 json.dumps(_clean_obj(mapping), default=str),
+                mapping.get("source_sql") or "",
                 mapping.get("target_sql") or ""
             ))
         
@@ -577,6 +665,7 @@ def main(session: Session):
         schema = StructType([
             StructField("mapping_id", StringType()),
             StructField("mapping_json_str", StringType()),
+            StructField("source_sql", StringType()),
             StructField("target_sql", StringType())
         ])
         
@@ -588,24 +677,25 @@ def main(session: Session):
             df["mapping_id"],
             current_timestamp().alias("run_timestamp"),
             parse_json(df["mapping_json_str"]).alias("mapping_json"),
+            df["source_sql"],
             df["target_sql"]
         )
         
         # Write to table
         df.write.mode("append").save_as_table(full_table)
         
-        log.append(f"[STEP 4] {len(data)} row(s) inserted into {full_table}  ✅")
+        log.append(f"[STEP 4] {len(data)} row(s) inserted into {full_table}  [OK]")
         log.append(f"         Query table: SELECT * FROM {full_table};")
     
     # Summary
     log.append("")
-    log.append("══════════════════════════════════════════")
-    log.append(f"  ✅ PHASE 1 COMPLETE — {len(data)} mapping(s)")
-    log.append("══════════════════════════════════════════")
+    log.append("==========================================")
+    log.append(f"  [OK] PHASE 1 COMPLETE — {len(data)} mapping(s)")
+    log.append("==========================================")
     if WRITE_TO_TABLE:
         log.append(f"  Table: {db_prefix}{OUTPUT_SCHEMA}.{OUTPUT_TABLE}")
     log.append(f"  Warnings: {len(warnings)}")
     log.append(f"  Status: SUCCESS")
-    log.append("══════════════════════════════════════════")
+    log.append("==========================================")
     
     return "\n".join(log)
