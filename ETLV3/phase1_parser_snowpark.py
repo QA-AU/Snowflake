@@ -6,8 +6,9 @@
 
 VERSION:        1.0.0
 RELEASE DATE:   2026-02-18
+AUTHOR:         Data Engineering Team
 LANGUAGE:       Python 3.9+
-DEPENDENCIES:   pandas, openpyxl 
+DEPENDENCIES:   pandas, openpyxl (install via Packages menu in Snowsight)
 
 HOW TO RUN IN SNOWFLAKE:
   1. Upload Phase1_DataInput.xlsx to Snowflake stage
@@ -545,34 +546,35 @@ def main(session: Session):
     
     # Step 4: Write to Snowflake table
     if WRITE_TO_TABLE:
+        from datetime import datetime
+        
         db_prefix = f"{OUTPUT_DATABASE}." if OUTPUT_DATABASE else ""
         full_table = f"{db_prefix}{OUTPUT_SCHEMA}.{OUTPUT_TABLE}"
         log.append(f"[STEP 4] Writing to {full_table}...")
         
-        # Create or replace table
+        # Create table if not exists
         session.sql(f"""
             CREATE TABLE IF NOT EXISTS {full_table} (
                 mapping_id       VARCHAR,
-                run_timestamp    TIMESTAMP_NTZ DEFAULT CURRENT_TIMESTAMP(),
+                run_timestamp    TIMESTAMP_NTZ,
                 mapping_json     VARIANT,
                 target_sql       VARCHAR
             )
         """).collect()
         
-        # Insert each mapping
+        # Prepare data for DataFrame
+        rows = []
         for mapping in data:
-            mid = mapping.get("mapping_id", "UNKNOWN")
-            target_sql = (mapping.get("target_sql") or "").replace("'", "\\'")
-            row_json = json.dumps(_clean_obj(mapping), default=str).replace("'", "\\'")
-            
-            session.sql(f"""
-                INSERT INTO {full_table}
-                    (mapping_id, mapping_json, target_sql)
-                SELECT
-                    '{mid}',
-                    PARSE_JSON('{row_json}'),
-                    '{target_sql}'
-            """).collect()
+            rows.append({
+                "MAPPING_ID": mapping.get("mapping_id", "UNKNOWN"),
+                "RUN_TIMESTAMP": datetime.now(),
+                "MAPPING_JSON": json.dumps(_clean_obj(mapping), default=str),
+                "TARGET_SQL": mapping.get("target_sql") or ""
+            })
+        
+        # Create DataFrame and write to table
+        df = session.create_dataframe(rows)
+        df.write.mode("append").save_as_table(full_table)
         
         log.append(f"[STEP 4] {len(data)} row(s) inserted into {full_table}  ✅")
         log.append(f"         Query table: SELECT * FROM {full_table};")
