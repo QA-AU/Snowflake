@@ -4,7 +4,7 @@
                         (Single-Sheet Format)
 ================================================================================
 
-VERSION:        1.1.0
+VERSION:        1.1.3
 RELEASE DATE:   2026-02-19
 AUTHOR:         QA
 LANGUAGE:       Python 3.9+
@@ -22,16 +22,23 @@ HOW TO RUN IN SNOWFLAKE:
   
   4. Paste this entire script into the worksheet
   
-  5. Edit CONFIGURATION section below (lines 30-40)
+  5. Edit CONFIGURATION section below
   
   6. Click "Run" button
 
 OUTPUT:
   - Writes to Snowflake table: DATABASE.SCHEMA.TABLE_NAME
-  - Table columns: mapping_id, run_timestamp, mapping_json, target_sql
+  - Table columns: mapping_id, run_timestamp, mapping_json, source_sql, target_sql
   - Console shows step-by-step progress and SQL generation
 
-==============================================================================
+CHANGES in v1.1.3:
+  - Auto-casting when source/target data types differ
+  - source_sql: Extracts FROM source tables (renamed from target_sql)
+  - target_sql: Queries FROM target tables (NEW)
+  - Empty source_column allowed for system/hardcoded columns
+  - Removed graphic icons for Snowflake compatibility
+
+================================================================================
 """
 
 import json
@@ -47,7 +54,7 @@ from snowflake.snowpark import Session
 
 
 # ==============================================================================
-# [CONFIG]  CONFIGURATION   EDIT THESE VALUES
+# [CONFIG]  CONFIGURATION - EDIT THESE VALUES
 # ==============================================================================
 
 # INPUT: Snowflake stage path to Excel file
@@ -64,7 +71,7 @@ WRITE_TO_TABLE = True               # Set False to skip table write (dry run)
 # ==============================================================================
 
 
-# -- Column definitions --------------------------------------------------------
+# Column definitions ------------------------------------------------------------
 
 TABLE_MANDATORY = [
     "mapping_id", "db_name", "source_system", "source_schema",
@@ -78,7 +85,7 @@ COLUMN_MANDATORY = [
     "target_data_type", "transformationtype",
 ]
 
-# Note: source_column can be empty when transformationtype=SQL
+# Note: source_column, source_table can be empty when transformationtype=SQL
 # This allows for system columns like CURRENT_TIMESTAMP(), hardcoded values, etc.
 
 YN_TABLE_FIELDS  = ["scd2_applicable", "delete_flag_applicable"]
@@ -87,7 +94,7 @@ TRANSFORMATION_TYPES = {"COPY", "SQL"}
 DEDUP_LOGIC_VALUES = {"KEEP_FIRST", "KEEP_LAST", "REJECT"}
 
 
-# -- Helpers -------------------------------------------------------------------
+# Helpers -----------------------------------------------------------------------
 
 class ValidationError(Exception):
     pass
@@ -249,9 +256,10 @@ def _clean_obj(obj):
     return obj
 
 
-# -- SQL Generation ------------------------------------------------------------
+# SQL Generation ----------------------------------------------------------------
 
-def build_target_sql(mapping: dict) -> str:
+def build_source_sql(mapping: dict) -> str:
+    """Build SQL to extract FROM source tables."""
     mid = mapping.get("mapping_id", "?")
     db = (mapping.get("db_name") or "").upper()
     schema = (mapping.get("source_schema") or "").upper()
@@ -262,7 +270,7 @@ def build_target_sql(mapping: dict) -> str:
     multi_table = bool(join_clause)
     
     print(f"\n{'='*60}")
-    print(f"  Building SQL for mapping: {mid}")
+    print(f"  Building SOURCE SQL for mapping: {mid}")
     print(f"{'='*60}")
     
     select_lines = []
@@ -282,20 +290,21 @@ def build_target_sql(mapping: dict) -> str:
             # Use column override
             expr = override
         else:
-            # COPY mode - but check if source_column exists
+            # COPY mode
             if not src_col:
-                # Empty source_column with COPY type is invalid
-                # This should be SQL type with a transformationrule
-                print(f"  [WARNING] Column {tgt_col}: source_column is empty but transformationtype=COPY")
-                print(f"            Consider using transformationtype=SQL instead")
-                expr = "NULL"  # Fallback to NULL
+                # Empty source_column - should be SQL type but handle gracefully
+                print(f"  [WARNING] Column {tgt_col}: source_column is empty, using NULL")
+                expr = "NULL"
+            elif not src_table:
+                # Empty source_table - use column without prefix
+                expr = src_col
             elif multi_table and src_table in alias_map:
                 expr = f"{alias_map[src_table]}.{src_col}"
             else:
                 expr = src_col
         
         # Apply default value
-        if default:
+        if default and expr != "NULL":
             try:
                 float(default)
                 expr = f"COALESCE({expr}, {default})"
@@ -307,7 +316,7 @@ def build_target_sql(mapping: dict) -> str:
         tgt_dtype = (col.get("target_data_type") or "").upper()
         
         if src_dtype and tgt_dtype and src_dtype != tgt_dtype:
-            # Only apply casting for COPY or simple expressions (not SQL transformations)
+            # Only apply casting for COPY or simple expressions (not SQL transformations with rules)
             if tt != "SQL" or not rule:
                 if "DATE" in tgt_dtype and "DATE" not in src_dtype:
                     expr = f"TRY_TO_DATE({expr})"
@@ -327,6 +336,7 @@ def build_target_sql(mapping: dict) -> str:
     select_clause = "SELECT\n" + ",\n".join(select_lines)
     print(f"\n[SELECT]\n{select_clause}")
     
+    # FROM
     if multi_table:
         qualified_join = _inject_schema_into_join(join_clause, db, schema)
         from_clause = f"FROM {qualified_join}"
@@ -338,6 +348,7 @@ def build_target_sql(mapping: dict) -> str:
     
     print(f"\n[FROM]\n{from_clause}")
     
+    # WHERE
     filter_parts = []
     for field in ["source_filter", "source_date_filter", "source_filter_other"]:
         val = (mapping.get(field) or "").strip()
@@ -350,6 +361,7 @@ def build_target_sql(mapping: dict) -> str:
     else:
         print("\n[WHERE] (none)")
     
+    # QUALIFY
     qualify_clause = ""
     sample_set = mapping.get("sample_set")
     if sample_set:
@@ -362,10 +374,10 @@ def build_target_sql(mapping: dict) -> str:
                 tt = (col.get("transformationtype") or "").upper()
                 rule = col.get("transformationrule") or ""
                 if tt == "SQL" and rule:
-                    pk_exprs.append(rule if "." in rule else rule)
+                    pk_exprs.append(rule)
                 elif override:
                     pk_exprs.append(override)
-                else:
+                elif src_col:
                     if multi_table and src_table in alias_map:
                         pk_exprs.append(f"{alias_map[src_table]}.{src_col}")
                     else:
@@ -383,18 +395,13 @@ def build_target_sql(mapping: dict) -> str:
         parts.append(qualify_clause)
     
     full_sql = "\n".join(parts)
-    print(f"\n[FULL SQL]\n{full_sql}")
+    print(f"\n[FULL SOURCE SQL]\n{full_sql}")
     print(f"\n{'-'*60}")
     return full_sql
 
 
-
-
-def build_target_table_sql(mapping: dict) -> str:
-    """
-    Build SQL to query the TARGET table (for comparison/validation).
-    Uses target_table, target_join, target_filter, etc.
-    """
+def build_target_sql(mapping: dict) -> str:
+    """Build SQL to query FROM target table."""
     mid = mapping.get("mapping_id", "?")
     db = (mapping.get("db_name") or "").upper()
     schema = (mapping.get("target_schema") or "").upper()
@@ -421,14 +428,13 @@ def build_target_table_sql(mapping: dict) -> str:
     
     # FROM
     if join_clause:
-        # If target_join is specified, use it
         from_clause = f"FROM {db}.{schema}.{join_clause}"
     else:
         from_clause = f"FROM {db}.{schema}.{table}"
     
     print(f"\n[FROM]\n{from_clause}")
     
-    # WHERE - combine target filters
+    # WHERE
     filter_parts = []
     for field in ["target_filter", "target_date_filter", "target_filter_other"]:
         val = (mapping.get(field) or "").strip()
@@ -441,7 +447,6 @@ def build_target_table_sql(mapping: dict) -> str:
     else:
         print("\n[WHERE] (none)")
     
-    # Assemble
     parts = [select_clause, from_clause]
     if where_clause:
         parts.append(where_clause)
@@ -452,7 +457,7 @@ def build_target_table_sql(mapping: dict) -> str:
     return full_sql
 
 
-# -- Validation ----------------------------------------------------------------
+# Validation --------------------------------------------------------------------
 
 def validate_and_generate(filepath: str) -> tuple:
     errors = []
@@ -537,8 +542,20 @@ def validate_and_generate(filepath: str) -> tuple:
         tgt_pk_rows = []
         
         for col_idx, col in enumerate(columns, 1):
+            # Check if this is a system/hardcoded column
+            tt = (col.get("transformationtype") or "").upper()
+            is_system_column = (not col.get("source_column")) and (tt == "SQL")
+            
             for field in COLUMN_MANDATORY:
-                if not col.get(field):
+                # For system columns, allow empty source fields
+                if is_system_column and field in ("source_column", "source_table", "source_keys", "source_data_type"):
+                    continue
+                
+                # source_column can be empty if transformationtype=SQL
+                if field == "source_column":
+                    if not col.get(field) and tt != "SQL":
+                        errors.append(f"  Mapping {map_idx}, Column {col_idx}: 'source_column' is mandatory (unless transformationtype=SQL).")
+                elif not col.get(field):
                     errors.append(f"  Mapping {map_idx}, Column {col_idx}: '{field}' is mandatory but empty.")
             
             for field in YN_COLUMN_FIELDS:
@@ -546,11 +563,9 @@ def validate_and_generate(filepath: str) -> tuple:
                 if val and val.upper() not in ("Y", "N"):
                     errors.append(f"  Mapping {map_idx}, Column {col_idx}: '{field}' must be Y or N.")
             
-            tt = (col.get("transformationtype") or "").upper()
-            rule = col.get("transformationrule")
             if tt and tt not in TRANSFORMATION_TYPES:
                 errors.append(f"  Mapping {map_idx}, Column {col_idx}: transformationtype must be COPY or SQL.")
-            if tt == "SQL" and not rule:
+            if tt == "SQL" and not col.get("transformationrule"):
                 errors.append(f"  Mapping {map_idx}, Column {col_idx}: transformationrule required when transformationtype=SQL.")
             
             target_col = col.get("target_column")
@@ -570,12 +585,12 @@ def validate_and_generate(filepath: str) -> tuple:
         
         # Cross-field validations
         if not src_pk_rows:
-            errors.append(f"  Mapping {map_idx}: No source_keys=Y column found — at least one required.")
+            errors.append(f"  Mapping {map_idx}: No source_keys=Y column found - at least one required.")
         if not tgt_pk_rows:
-            errors.append(f"  Mapping {map_idx}: No target_keys=Y column found — at least one required.")
+            errors.append(f"  Mapping {map_idx}: No target_keys=Y column found - at least one required.")
         
         if ss and not src_pk_rows:
-            errors.append(f"  Mapping {map_idx}: sample_set set but no source PK columns — cannot build QUALIFY.")
+            errors.append(f"  Mapping {map_idx}: sample_set set but no source PK columns - cannot build QUALIFY.")
         
         # Build final mapping object
         entry = dict(mapping_info)
@@ -585,8 +600,8 @@ def validate_and_generate(filepath: str) -> tuple:
             except Exception:
                 pass
         entry["columns"] = columns
-        entry["source_sql"] = build_target_sql(entry) if not errors else ""
-        entry["target_sql"] = build_target_table_sql(entry) if not errors else ""
+        entry["source_sql"] = build_source_sql(entry) if not errors else ""
+        entry["target_sql"] = build_target_sql(entry) if not errors else ""
         result.append(entry)
     
     if errors:
@@ -597,9 +612,7 @@ def validate_and_generate(filepath: str) -> tuple:
     return result, warnings
 
 
-# ==============================================================================
-# SNOWPARK MAIN   Entry point for Snowflake worksheet
-# ==============================================================================
+# SNOWPARK MAIN -----------------------------------------------------------------
 
 def main(session: Session):
     """
@@ -637,13 +650,13 @@ def main(session: Session):
     except ValidationError as e:
         raise Exception(str(e))
     
-    log.append(f"[STEP 2] Parsed {len(data)} mapping(s) successfully [OK]")
+    log.append(f"[STEP 2] Parsed {len(data)} mapping(s) successfully  [OK]")
     for w in warnings:
         log.append(f"  [WARNING]  {w}")
     
     # Step 3: Serialize to JSON
     json_str = json.dumps(_clean_obj(data), indent=2, default=str)
-    log.append(f"[STEP 3] JSON serialized — {len(json_str):,} characters  [OK]")
+    log.append(f"[STEP 3] JSON serialized - {len(json_str):,} characters  [OK]")
     
     # Step 4: Write to Snowflake table
     if WRITE_TO_TABLE:
@@ -656,7 +669,6 @@ def main(session: Session):
         log.append(f"[STEP 4] Writing to {full_table}...")
         
         # Drop and recreate table to ensure schema matches
-        # This ensures we have the correct columns (source_sql + target_sql)
         session.sql(f"""
             CREATE OR REPLACE TABLE {full_table} (
                 mapping_id       VARCHAR,
@@ -667,7 +679,7 @@ def main(session: Session):
             )
         """).collect()
         
-        # Prepare data as list of tuples (mapping_id, json_string, target_sql)
+        # Prepare data as list of tuples
         rows = []
         for mapping in data:
             rows.append((
@@ -705,13 +717,13 @@ def main(session: Session):
     
     # Summary
     log.append("")
-    log.append("==========================================")
-    log.append(f"  [OK] PHASE 1 COMPLETE — {len(data)} mapping(s)")
-    log.append("==========================================")
+    log.append("="*42)
+    log.append(f"  [OK] PHASE 1 COMPLETE - {len(data)} mapping(s)")
+    log.append("="*42)
     if WRITE_TO_TABLE:
         log.append(f"  Table: {db_prefix}{OUTPUT_SCHEMA}.{OUTPUT_TABLE}")
     log.append(f"  Warnings: {len(warnings)}")
     log.append(f"  Status: SUCCESS")
-    log.append("==========================================")
+    log.append("="*42)
     
     return "\n".join(log)
