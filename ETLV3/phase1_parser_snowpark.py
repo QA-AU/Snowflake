@@ -78,6 +78,9 @@ COLUMN_MANDATORY = [
     "target_data_type", "transformationtype",
 ]
 
+# Note: source_column can be empty when transformationtype=SQL
+# This allows for system columns like CURRENT_TIMESTAMP(), hardcoded values, etc.
+
 YN_TABLE_FIELDS  = ["scd2_applicable", "delete_flag_applicable"]
 YN_COLUMN_FIELDS = ["source_keys", "target_keys"]
 TRANSFORMATION_TYPES = {"COPY", "SQL"}
@@ -270,11 +273,20 @@ def build_target_sql(mapping: dict) -> str:
         default = col.get("source_default_value") or ""
         
         if tt == "SQL" and rule:
-            expr = rule if "." in rule else rule
+            # SQL transformation - use the rule as-is
+            expr = rule
         elif override:
+            # Use column override
             expr = override
         else:
-            if multi_table and src_table in alias_map:
+            # COPY mode - but check if source_column exists
+            if not src_col:
+                # Empty source_column with COPY type is invalid
+                # This should be SQL type with a transformationrule
+                print(f"  [WARNING] Column {tgt_col}: source_column is empty but transformationtype=COPY")
+                print(f"            Consider using transformationtype=SQL instead")
+                expr = "NULL"  # Fallback to NULL
+            elif multi_table and src_table in alias_map:
                 expr = f"{alias_map[src_table]}.{src_col}"
             else:
                 expr = src_col
@@ -640,9 +652,10 @@ def main(session: Session):
         full_table = f"{db_prefix}{OUTPUT_SCHEMA}.{OUTPUT_TABLE}"
         log.append(f"[STEP 4] Writing to {full_table}...")
         
-        # Create table if not exists
+        # Drop and recreate table to ensure schema matches
+        # This ensures we have the correct columns (source_sql + target_sql)
         session.sql(f"""
-            CREATE TABLE IF NOT EXISTS {full_table} (
+            CREATE OR REPLACE TABLE {full_table} (
                 mapping_id       VARCHAR,
                 run_timestamp    TIMESTAMP_NTZ,
                 mapping_json     VARIANT,
