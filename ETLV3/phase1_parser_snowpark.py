@@ -336,6 +336,73 @@ def _clean_obj(obj):
     return obj
 
 
+
+
+def _fix_string_quotes(value: str) -> str:
+    """
+    Fix string literals that may have been mangled by Excel.
+    Handles:
+    - SAP' -> 'SAP' (Excel strips leading quote)
+    - "SAP" -> 'SAP' (convert double quotes)
+    - 'SAP' -> 'SAP' (already correct)
+    - SAP -> 'SAP' (add quotes for bare word)
+    
+    Does NOT modify:
+    - Column references: T1.COLUMN_NAME
+    - Functions: CURRENT_TIMESTAMP()
+    - SQL keywords: NULL, TRUE, FALSE
+    - Numbers: 123, 45.67
+    - Complex expressions with operators
+    """
+    if not value:
+        return value
+    
+    value = value.strip()
+    
+    # Don't modify if it contains SQL operators or functions
+    sql_indicators = ['(', ')', '.', 'CASE', 'WHEN', 'THEN', 'END', 
+                      'CAST', 'COALESCE', '||', '+', '-', '*', '/',
+                      'SELECT', 'FROM', 'WHERE']
+    if any(ind in value.upper() for ind in sql_indicators):
+        return value
+    
+    # Don't modify SQL keywords
+    if value.upper() in ['NULL', 'TRUE', 'FALSE', 'CURRENT_TIMESTAMP', 
+                          'CURRENT_DATE', 'CURRENT_TIME', 'CURRENT_USER']:
+        return value
+    
+    # Don't modify numbers
+    try:
+        float(value.replace(',', ''))
+        return value
+    except ValueError:
+        pass
+    
+    # Case 1: Double quotes -> convert to single quotes
+    if value.startswith('"') and value.endswith('"'):
+        inner = value[1:-1]
+        # Escape any single quotes in the inner string
+        inner = inner.replace("'", "''")
+        return f"'{inner}'"
+    
+    # Case 2: Missing leading quote (Excel ate it) - ends with quote but doesn't start
+    if value.endswith("'") and not value.startswith("'"):
+        # Add the missing leading quote
+        return f"'{value}"
+    
+    # Case 3: Already has both quotes
+    if value.startswith("'") and value.endswith("'"):
+        return value
+    
+    # Case 4: Bare word that looks like a string literal (no spaces, not a column ref)
+    # Only add quotes if it's a simple word/text (no dots, not uppercase SQL keywords)
+    if ' ' not in value and '.' not in value and not value.isupper():
+        return f"'{value}'"
+    
+    # Default: return as-is (might be column reference or complex expression)
+    return value
+
+
 # SQL Generation ----------------------------------------------------------------
 
 def build_source_sql(mapping: dict) -> str:
@@ -364,8 +431,8 @@ def build_source_sql(mapping: dict) -> str:
         default = col.get("source_default_value") or ""
         
         if tt == "SQL" and rule:
-            # SQL transformation - use the rule as-is
-            expr = rule
+            # SQL transformation - fix quotes if needed
+            expr = _fix_string_quotes(rule)
         elif override:
             # Use column override
             expr = override
