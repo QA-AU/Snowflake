@@ -547,6 +547,8 @@ def main(session: Session):
     # Step 4: Write to Snowflake table
     if WRITE_TO_TABLE:
         from datetime import datetime
+        from snowflake.snowpark.functions import parse_json, lit, current_timestamp
+        from snowflake.snowpark.types import StructType, StructField, StringType, TimestampType, VariantType
         
         db_prefix = f"{OUTPUT_DATABASE}." if OUTPUT_DATABASE else ""
         full_table = f"{db_prefix}{OUTPUT_SCHEMA}.{OUTPUT_TABLE}"
@@ -562,18 +564,34 @@ def main(session: Session):
             )
         """).collect()
         
-        # Prepare data for DataFrame
+        # Prepare data as list of tuples (mapping_id, json_string, target_sql)
         rows = []
         for mapping in data:
-            rows.append({
-                "MAPPING_ID": mapping.get("mapping_id", "UNKNOWN"),
-                "RUN_TIMESTAMP": datetime.now(),
-                "MAPPING_JSON": json.dumps(_clean_obj(mapping), default=str),
-                "TARGET_SQL": mapping.get("target_sql") or ""
-            })
+            rows.append((
+                mapping.get("mapping_id", "UNKNOWN"),
+                json.dumps(_clean_obj(mapping), default=str),
+                mapping.get("target_sql") or ""
+            ))
         
-        # Create DataFrame and write to table
-        df = session.create_dataframe(rows)
+        # Define schema for staging DataFrame
+        schema = StructType([
+            StructField("mapping_id", StringType()),
+            StructField("mapping_json_str", StringType()),
+            StructField("target_sql", StringType())
+        ])
+        
+        # Create DataFrame
+        df = session.create_dataframe(rows, schema=schema)
+        
+        # Add timestamp and convert JSON string to VARIANT
+        df = df.select(
+            df["mapping_id"],
+            current_timestamp().alias("run_timestamp"),
+            parse_json(df["mapping_json_str"]).alias("mapping_json"),
+            df["target_sql"]
+        )
+        
+        # Write to table
         df.write.mode("append").save_as_table(full_table)
         
         log.append(f"[STEP 4] {len(data)} row(s) inserted into {full_table}  ✅")
