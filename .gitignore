@@ -1,0 +1,6 @@
+pytorch-project/pytorch_env/
+pytorch-project/pytorch_env/*
+.venv/
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
