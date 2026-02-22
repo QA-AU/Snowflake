@@ -13,3 +13,4 @@ jobs:
       - run: pip install flake8 black
       - run: flake8 . --max-line-length=120 --exclude=pytorch-project
       - run: black --check . --exclude=pytorch-project
+      - run: flake8 . --max-line-length=120 --exclude=pytorch-project --ignore=W293,E221,E231,F401
