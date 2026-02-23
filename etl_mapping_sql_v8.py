@@ -4,30 +4,24 @@ import re
 # ===================== Configuration =========================================
 TABLE_META = {
     "debug_mode": "YES",
-
     "source_system": "ERP",
     "source_db_name": "SALES_DB",
     "source_schema_name": "PUBLIC",
-
     # Can be:
     #   "PK1, PK2"
     #   "T1.PK1, T2.PK2"
     #   "T1.PK1 AS PK1, T2.PK2 AS PK2"
     "source_pk_columns": "ORDER_ID, LINE_NO",
-
     "source_join_clause": "LEFT JOIN LKP.CUST c ON c.id = o.cust_id",
     "source_filter_clause": "o.status = 'OPEN'",
-
     # left unresolved – replaced at execution time
     "date_filter": "order_date between XX.START_DT and XX.END_DT",
     "date_filter_token": "order_date",
-
     "target_filter_clause": "status = 'OPEN'",
-
     # Where to store generated SQL
     "qa_db_name": None,
     "qa_schema_name": "STG",
-    "qa_table_name": "QA_TEMP_MAPPING_SQL"
+    "qa_table_name": "QA_TEMP_MAPPING_SQL",
 }
 
 COLUMNS = [
@@ -42,7 +36,7 @@ COLUMNS = [
         "target_data_type": "STRING",
         "target_schema_name": "CORE",
         "target_table_name": "ORDERS",
-        "target_column_name": "cust_tier"
+        "target_column_name": "cust_tier",
     },
     {
         "source_table_name": "ORDERS",
@@ -55,7 +49,7 @@ COLUMNS = [
         "target_data_type": "DATE",
         "target_schema_name": "CORE",
         "target_table_name": "ORDERS",
-        "target_column_name": "order_date"
+        "target_column_name": "order_date",
     },
     {
         "source_table_name": "ORDERS",
@@ -68,44 +62,58 @@ COLUMNS = [
         "target_data_type": "NUMBER(18,2)",
         "target_schema_name": "CORE",
         "target_table_name": "ORDERS",
-        "target_column_name": "amount"
-    }
+        "target_column_name": "amount",
+    },
 ]
 # ============================================================================
+
 
 # ----------------------------- Helpers --------------------------------------
 def _is_null(x):
     return x is None or (isinstance(x, str) and x.strip().lower() in ("null", ""))
 
+
 def _path(db, schema, table):
     parts = []
-    if not _is_null(db): parts.append(db.strip())
-    if not _is_null(schema): parts.append(schema.strip())
+    if not _is_null(db):
+        parts.append(db.strip())
+    if not _is_null(schema):
+        parts.append(schema.strip())
     parts.append(table.strip())
     return ".".join(parts)
 
+
 def _q_lit(v):
-    if _is_null(v): return "NULL"
-    if isinstance(v, (int, float)): return str(v)
+    if _is_null(v):
+        return "NULL"
+    if isinstance(v, (int, float)):
+        return str(v)
     return "'" + str(v).replace("'", "''") + "'"
+
 
 def _split_csv(s):
     return [p.strip() for p in s.split(",") if p and p.strip()] if s else []
 
+
 def _apply_alias_token(expr, alias, table):
     actual = (alias if alias else table) + "."
-    return re.sub(r'(?i)\balias\.', actual, expr)
+    return re.sub(r"(?i)\balias\.", actual, expr)
+
 
 def _combine_filters(*parts):
     toks = [p.strip() for p in parts if p and str(p).strip()]
-    if not toks: return ""
+    if not toks:
+        return ""
     return " AND ".join([f"({t})" for t in toks])
 
+
 def _debug_on(meta):
-    return str(meta.get("debug_mode","")).upper() == "YES"
+    return str(meta.get("debug_mode", "")).upper() == "YES"
+
 
 def _resolve_date_filter(meta):
     return (meta.get("date_filter") or "").strip()
+
 
 def _qa_table_fqn(meta=None):
     meta = meta or TABLE_META
@@ -114,12 +122,16 @@ def _qa_table_fqn(meta=None):
     table = meta.get("qa_table_name")
     return _path(db, schema, table)
 
+
 # --- alias stripping to avoid "expr AS X AS X"
 def _strip_final_alias(expr: str):
-    if not expr: return expr
+    if not expr:
+        return expr
     m = re.match(r"^(.*)\s+AS\s+([A-Za-z_][A-Za-z0-9_$]*)$", expr.strip(), flags=re.I)
-    if m: return m.group(1)
+    if m:
+        return m.group(1)
     return expr
+
 
 # --- PK parser (supports FQ, AS)
 def _parse_pk_expr(pk_raw: str):
@@ -131,9 +143,11 @@ def _parse_pk_expr(pk_raw: str):
     alias = txt.split(".")[-1].strip()
     return expr, alias
 
+
 # --- runtime injection of order_date
 def _inject_order_date(sql, order_date_value):
-    if order_date_value is None: return sql
+    if order_date_value is None:
+        return sql
     lit = "'" + str(order_date_value).replace("'", "''") + "'"
     return re.sub(r"\border_date\b", lit, sql)
 
@@ -191,8 +205,8 @@ def build_source_sql_for_group(meta, cols):
     """
     debug = _debug_on(meta)
     db, schema = meta["source_db_name"], meta["source_schema_name"]
-    join = (meta.get("source_join_clause") or "")
-    src_flt = (meta.get("source_filter_clause") or "")
+    join = meta.get("source_join_clause") or ""
+    src_flt = meta.get("source_filter_clause") or ""
     pk_list = _split_csv(meta["source_pk_columns"])
 
     # base table/alias from first column in the group
@@ -206,7 +220,9 @@ def build_source_sql_for_group(meta, cols):
     fqn = _path(db, schema, base_tbl) + (f" {base_alias}" if base_alias else "")
 
     if debug:
-        print(f"[DEBUG] SOURCE_GROUP base_fqn={fqn} cols={[c['target_column_name'] for c in cols]}")
+        print(
+            f"[DEBUG] SOURCE_GROUP base_fqn={fqn} cols={[c['target_column_name'] for c in cols]}"
+        )
 
     # PKs
     sel_parts = []
@@ -244,7 +260,7 @@ def build_target_sql_for_group(meta, cols):
     """
     debug = _debug_on(meta)
     db = meta["source_db_name"]
-    tgt_flt = (meta.get("target_filter_clause") or "")
+    tgt_flt = meta.get("target_filter_clause") or ""
     pk_list = _split_csv(meta["source_pk_columns"])
 
     base_col = cols[0]
@@ -253,7 +269,9 @@ def build_target_sql_for_group(meta, cols):
     fqn = _path(db, tgt_schema, tgt_table)
 
     if debug:
-        print(f"[DEBUG] TARGET_GROUP fqn={fqn} cols={[c['target_column_name'] for c in cols]}")
+        print(
+            f"[DEBUG] TARGET_GROUP fqn={fqn} cols={[c['target_column_name'] for c in cols]}"
+        )
 
     # PKs: use the alias side
     pk_sel = []
@@ -352,14 +370,19 @@ def prepare_validation_sqls(session: Session, table_fqn: str = None):
         t_inner = t.rstrip(" ;\n\t")
 
         count_sql = (
-            "SELECT 'SRC' AS SIDE, COUNT(*) AS CNT FROM (" + s_inner +
-            ") SRC_T\nUNION ALL\nSELECT 'TGT' AS SIDE, COUNT(*) AS CNT FROM (" +
-            t_inner + ") TGT_T"
+            "SELECT 'SRC' AS SIDE, COUNT(*) AS CNT FROM ("
+            + s_inner
+            + ") SRC_T\nUNION ALL\nSELECT 'TGT' AS SIDE, COUNT(*) AS CNT FROM ("
+            + t_inner
+            + ") TGT_T"
         )
 
         diff_sql = (
-            "SELECT COUNT(*) AS DIFF_CNT FROM (\n(" + s_inner +
-            ")\nMINUS\n(" + t_inner + ")\n) D"
+            "SELECT COUNT(*) AS DIFF_CNT FROM (\n("
+            + s_inner
+            + ")\nMINUS\n("
+            + t_inner
+            + ")\n) D"
         )
 
         session.sql(f"""
@@ -422,7 +445,8 @@ def run_validation_sqls(session: Session, table_fqn: str = None, order_date_valu
 
         counts_json = (
             f"""PARSE_JSON('{{"SRC": {counts["SRC"]}, "TGT": {counts["TGT"]}}}')"""
-            if count_err is None else "NULL"
+            if count_err is None
+            else "NULL"
         )
         diff_expr = "NULL" if diff_val is None else str(diff_val)
         c_err = "NULL" if count_err is None else f"'{count_err}'"

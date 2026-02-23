@@ -31,12 +31,15 @@ def test_scd2_start_date_valid(session, meta: Dict, run_name: str):
     invalid = rows[0]["CNT"]
 
     insert_result_row(
-        session, meta, run_name, "SCD2_START_DATE_VALID",
+        session,
+        meta,
+        run_name,
+        "SCD2_START_DATE_VALID",
         sql_used=sql,
         passed=(invalid == 0),
         metrics={"invalid_start_dates": invalid},
         error=None,
-        duration_ms=dur
+        duration_ms=dur,
     )
 
 
@@ -62,12 +65,15 @@ def test_scd2_end_date_valid(session, meta: Dict, run_name: str):
     invalid = rows[0]["CNT"]
 
     insert_result_row(
-        session, meta, run_name, "SCD2_END_DATE_VALID",
+        session,
+        meta,
+        run_name,
+        "SCD2_END_DATE_VALID",
         sql_used=sql,
         passed=(invalid == 0),
         metrics={"invalid_end_dates": invalid},
         error=None,
-        duration_ms=dur
+        duration_ms=dur,
     )
 
 
@@ -98,12 +104,15 @@ def test_scd2_only_one_active(session, meta: Dict, run_name: str):
     conflicts = rows[0]["CNT"]
 
     insert_result_row(
-        session, meta, run_name, "SCD2_ONLY_ONE_ACTIVE",
+        session,
+        meta,
+        run_name,
+        "SCD2_ONLY_ONE_ACTIVE",
         sql_used=sql,
         passed=(conflicts == 0),
         metrics={"multi_active_groups": conflicts},
         error=None,
-        duration_ms=dur
+        duration_ms=dur,
     )
 
 
@@ -124,9 +133,9 @@ def test_scd2_change_detection(session, meta: Dict, run_name: str):
 
     bk_group = ",".join(bk)
 
-    comparisons = " OR ".join([
-        f"NVL(old.{c},'<NULL>') != NVL(new.{c},'<NULL>')" for c in scd
-    ])
+    comparisons = " OR ".join(
+        [f"NVL(old.{c},'<NULL>') != NVL(new.{c},'<NULL>')" for c in scd]
+    )
 
     sql = f"""
         SELECT COUNT(*) CNT
@@ -145,12 +154,15 @@ def test_scd2_change_detection(session, meta: Dict, run_name: str):
     detected = rows[0]["CNT"]
 
     insert_result_row(
-        session, meta, run_name, "SCD2_CHANGE_DETECTION",
+        session,
+        meta,
+        run_name,
+        "SCD2_CHANGE_DETECTION",
         sql_used=sql,
         passed=True,
         metrics={"changes_detected": detected},
         error=None,
-        duration_ms=dur
+        duration_ms=dur,
     )
 
 
@@ -175,12 +187,15 @@ def test_scd2_effective_sequence(session, meta: Dict, run_name: str):
     invalid = rows[0]["CNT"]
 
     insert_result_row(
-        session, meta, run_name, "SCD2_EFFECTIVE_SEQUENCE",
+        session,
+        meta,
+        run_name,
+        "SCD2_EFFECTIVE_SEQUENCE",
         sql_used=sql,
         passed=(invalid == 0),
         metrics={"invalid_ranges": invalid},
         error=None,
-        duration_ms=dur
+        duration_ms=dur,
     )
 
 
@@ -211,10 +226,13 @@ def test_scd2_surrogate_reuse(session, meta: Dict, run_name: str):
     conflicts = rows[0]["CNT"]
 
     insert_result_row(
-        session, meta, run_name, "SCD2_SURROGATE_REUSE",
+        session,
+        meta,
+        run_name,
+        "SCD2_SURROGATE_REUSE",
         sql_used=sql,
         passed=(conflicts == 0),
         metrics={"sk_reused_across_bk": conflicts},
         error=None,
-        duration_ms=dur
+        duration_ms=dur,
     )

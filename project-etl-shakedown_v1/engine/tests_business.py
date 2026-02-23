@@ -4,10 +4,7 @@
 # =========================================================
 
 from typing import Dict
-from engine.helpers import (
-    run_sql_with_timing,
-    insert_result_row
-)
+from engine.helpers import run_sql_with_timing, insert_result_row
 
 
 # =========================================================
@@ -26,15 +23,18 @@ def test_business_date_max_match(session, meta: Dict, run_name: str):
     rows, dur = run_sql_with_timing(session, sql)
     max_bd = str(rows[0]["MX"]) if rows[0]["MX"] else None
 
-    passed = (max_bd == bd)
+    passed = max_bd == bd
 
     insert_result_row(
-        session, meta, run_name, "BUSINESS_DATE_MAX_MATCH",
+        session,
+        meta,
+        run_name,
+        "BUSINESS_DATE_MAX_MATCH",
         sql_used=sql,
         passed=passed,
         metrics={"max_business_date": max_bd, "expected_business_date": bd},
         error=None,
-        duration_ms=dur
+        duration_ms=dur,
     )
 
 
@@ -60,12 +60,15 @@ def test_insert_count(session, meta: Dict, run_name: str):
     count = rows[0]["CNT"]
 
     insert_result_row(
-        session, meta, run_name, "INSERT_COUNT",
+        session,
+        meta,
+        run_name,
+        "INSERT_COUNT",
         sql_used=sql,
         passed=True,
         metrics={"inserted_rows": count},
         error=None,
-        duration_ms=dur
+        duration_ms=dur,
     )
 
 
@@ -91,12 +94,15 @@ def test_update_count(session, meta: Dict, run_name: str):
     count = rows[0]["CNT"]
 
     insert_result_row(
-        session, meta, run_name, "UPDATE_COUNT",
+        session,
+        meta,
+        run_name,
+        "UPDATE_COUNT",
         sql_used=sql,
         passed=True,
         metrics={"updated_rows": count},
         error=None,
-        duration_ms=dur
+        duration_ms=dur,
     )
 
 
@@ -124,10 +130,13 @@ def test_delete_count(session, meta: Dict, run_name: str):
     count = rows[0]["CNT"]
 
     insert_result_row(
-        session, meta, run_name, "DELETE_COUNT",
+        session,
+        meta,
+        run_name,
+        "DELETE_COUNT",
         sql_used=sql,
         passed=True,
         metrics={"deleted_rows": count},
         error=None,
-        duration_ms=dur
+        duration_ms=dur,
     )

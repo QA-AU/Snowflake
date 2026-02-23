@@ -53,8 +53,7 @@ if ENV not in ALLOWED_ENVS:
 
 if ENV == "PROD" and not ALLOW_PROD_RUN:
     raise RuntimeError(
-        "PROD execution blocked. "
-        "Set ALLOW_PROD_RUN = True to proceed."
+        "PROD execution blocked. " "Set ALLOW_PROD_RUN = True to proceed."
     )
 
 # ============================================================
@@ -62,18 +61,9 @@ if ENV == "PROD" and not ALLOW_PROD_RUN:
 # ============================================================
 
 ENV_TEST_POLICY = {
-    "DEV": {
-        "run_fk_checks": True,
-        "run_scd2_checks": True
-    },
-    "TEST": {
-        "run_fk_checks": True,
-        "run_scd2_checks": True
-    },
-    "PROD": {
-        "run_fk_checks": True,
-        "run_scd2_checks": False  # smoke-level only
-    }
+    "DEV": {"run_fk_checks": True, "run_scd2_checks": True},
+    "TEST": {"run_fk_checks": True, "run_scd2_checks": True},
+    "PROD": {"run_fk_checks": True, "run_scd2_checks": False},  # smoke-level only
 }
 
 POLICY = ENV_TEST_POLICY[ENV]
@@ -86,38 +76,23 @@ DATABASE_NAME = "EDW"
 RESULT_SCHEMA = "STG"
 RESULT_TABLE = "QA_DQ_RUN"
 
-EXPECTED_WAREHOUSE = {
-    "DEV": "DEV_QA_WH",
-    "TEST": "TEST_QA_WH",
-    "PROD": "PROD_QA_WH"
-}
+EXPECTED_WAREHOUSE = {"DEV": "DEV_QA_WH", "TEST": "TEST_QA_WH", "PROD": "PROD_QA_WH"}
 
 TABLE_TEST_CONFIG = [
     {
         "schema": "DIM",
         "table": "DIM_CUSTOMER",
         "pk": "CUSTOMER_ID",
-
         # Numeric range checks
-        "range_checks": {
-            "AGE": (0, 120)
-        },
-
+        "range_checks": {"AGE": (0, 120)},
         # Regex / pattern checks
-        "regex_checks": {
-            "EMAIL": r"^[^@]+@[^@]+\.[^@]+$"
-        },
-
+        "regex_checks": {"EMAIL": r"^[^@]+@[^@]+\.[^@]+$"},
         # FK relationships (only child + parent provided)
         "fk_relationships": [
-            {
-                "child_table": "DIM.DIM_CUSTOMER",
-                "parent_table": "DIM.DIM_COUNTRY"
-            }
+            {"child_table": "DIM.DIM_CUSTOMER", "parent_table": "DIM.DIM_COUNTRY"}
         ],
-
         # Enable SCD2 checks
-        "scd2": True
+        "scd2": True,
     }
 ]
 
@@ -132,14 +107,13 @@ import uuid
 # 5. CORE HELPERS (SESSION-AGNOSTIC)
 # ============================================================
 
+
 def validate_environment(session):
     """
     Ensures script is running on the correct warehouse for the environment.
     Prevents accidental heavy scans on shared or ETL warehouses.
     """
-    current_wh = session.sql(
-        "SELECT CURRENT_WAREHOUSE()"
-    ).collect()[0][0]
+    current_wh = session.sql("SELECT CURRENT_WAREHOUSE()").collect()[0][0]
 
     if current_wh != EXPECTED_WAREHOUSE[ENV]:
         raise RuntimeError(
@@ -176,20 +150,13 @@ def log_test(session, run_ts, run_id, schema, table, test_name, sql):
     failure_count = session.sql(sql).collect()[0][0]
     status = "PASS" if failure_count == 0 else "FAIL"
 
-    session.sql(f"""
+    session.sql(
+        f"""
         INSERT INTO {RESULT_SCHEMA}.{RESULT_TABLE}
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-    """, [
-        run_ts,
-        run_id,
-        ENV,
-        schema,
-        table,
-        test_name,
-        status,
-        failure_count,
-        sql
-    ]).collect()
+    """,
+        [run_ts, run_id, ENV, schema, table, test_name, status, failure_count, sql],
+    ).collect()
 
 
 def get_fk_mappings(session, child_table, parent_table):
@@ -214,9 +181,11 @@ def get_fk_mappings(session, child_table, parent_table):
           AND kcu_parent.table_name   = '{parent_name}'
     """).collect()
 
+
 # ============================================================
 # 6. MAIN VALIDATION LOGIC
 # ============================================================
+
 
 def run_all_tests(session):
     """
@@ -239,25 +208,37 @@ def run_all_tests(session):
         # DQ: Table not empty
         # -------------------------------
         log_test(
-            session, run_ts, run_id, schema, table,
+            session,
+            run_ts,
+            run_id,
+            schema,
+            table,
             "DQ_TABLE_NOT_EMPTY",
-            f"SELECT COUNT(*) FROM {full_table} HAVING COUNT(*) = 0"
+            f"SELECT COUNT(*) FROM {full_table} HAVING COUNT(*) = 0",
         )
 
         # -------------------------------
         # DQ: PK NOT NULL
         # -------------------------------
         log_test(
-            session, run_ts, run_id, schema, table,
+            session,
+            run_ts,
+            run_id,
+            schema,
+            table,
             "DQ_PK_NOT_NULL",
-            f"SELECT COUNT(*) FROM {full_table} WHERE {cfg['pk']} IS NULL"
+            f"SELECT COUNT(*) FROM {full_table} WHERE {cfg['pk']} IS NULL",
         )
 
         # -------------------------------
         # DQ: PK UNIQUE
         # -------------------------------
         log_test(
-            session, run_ts, run_id, schema, table,
+            session,
+            run_ts,
+            run_id,
+            schema,
+            table,
             "DQ_PK_UNIQUE",
             f"""
             SELECT COUNT(*)
@@ -267,7 +248,7 @@ def run_all_tests(session):
                 GROUP BY {cfg['pk']}
                 HAVING COUNT(*) > 1
             )
-            """
+            """,
         )
 
         # -------------------------------
@@ -275,14 +256,18 @@ def run_all_tests(session):
         # -------------------------------
         for col, (min_v, max_v) in cfg.get("range_checks", {}).items():
             log_test(
-                session, run_ts, run_id, schema, table,
+                session,
+                run_ts,
+                run_id,
+                schema,
+                table,
                 f"DQ_RANGE_{col}",
                 f"""
                 SELECT COUNT(*)
                 FROM {full_table}
                 WHERE {col} < {min_v}
                    OR {col} > {max_v}
-                """
+                """,
             )
 
         # -------------------------------
@@ -290,14 +275,18 @@ def run_all_tests(session):
         # -------------------------------
         for col, pattern in cfg.get("regex_checks", {}).items():
             log_test(
-                session, run_ts, run_id, schema, table,
+                session,
+                run_ts,
+                run_id,
+                schema,
+                table,
                 f"DQ_REGEX_{col}",
                 f"""
                 SELECT COUNT(*)
                 FROM {full_table}
                 WHERE {col} IS NOT NULL
                   AND NOT REGEXP_LIKE({col}, '{pattern}')
-                """
+                """,
             )
 
         # -------------------------------
@@ -305,15 +294,15 @@ def run_all_tests(session):
         # -------------------------------
         if POLICY["run_fk_checks"]:
             for rel in cfg.get("fk_relationships", []):
-                fks = get_fk_mappings(
-                    session,
-                    rel["child_table"],
-                    rel["parent_table"]
-                )
+                fks = get_fk_mappings(session, rel["child_table"], rel["parent_table"])
 
                 for fk in fks:
                     log_test(
-                        session, run_ts, run_id, schema, table,
+                        session,
+                        run_ts,
+                        run_id,
+                        schema,
+                        table,
                         f"DQ_FK_{fk['CHILD_COLUMN']}",
                         f"""
                         SELECT COUNT(*)
@@ -322,7 +311,7 @@ def run_all_tests(session):
                           ON c.{fk['CHILD_COLUMN']} = p.{fk['PARENT_COLUMN']}
                         WHERE c.{fk['CHILD_COLUMN']} IS NOT NULL
                           AND p.{fk['PARENT_COLUMN']} IS NULL
-                        """
+                        """,
                     )
 
         # -------------------------------
@@ -330,7 +319,11 @@ def run_all_tests(session):
         # -------------------------------
         if cfg.get("scd2") and POLICY["run_scd2_checks"]:
             log_test(
-                session, run_ts, run_id, schema, table,
+                session,
+                run_ts,
+                run_id,
+                schema,
+                table,
                 "SCD2_SINGLE_ACTIVE",
                 f"""
                 SELECT COUNT(*)
@@ -341,50 +334,61 @@ def run_all_tests(session):
                     GROUP BY {cfg['pk']}
                     HAVING COUNT(*) != 1
                 )
-                """
+                """,
             )
 
             log_test(
-                session, run_ts, run_id, schema, table,
+                session,
+                run_ts,
+                run_id,
+                schema,
+                table,
                 "SCD2_ACTIVE_OPEN",
                 f"""
                 SELECT COUNT(*)
                 FROM {full_table}
                 WHERE is_current = 1
                   AND valid_to IS NOT NULL
-                """
+                """,
             )
 
             log_test(
-                session, run_ts, run_id, schema, table,
+                session,
+                run_ts,
+                run_id,
+                schema,
+                table,
                 "SCD2_DELETED_CLOSED",
                 f"""
                 SELECT COUNT(*)
                 FROM {full_table}
                 WHERE is_deleted = 1
                   AND valid_to IS NULL
-                """
+                """,
             )
 
     # ====================================================
     # PYTEST-STYLE FINAL ASSERTION
     # ====================================================
 
-    failures = session.sql(f"""
+    failures = session.sql(
+        f"""
         SELECT schema_name, table_name, test_name, failure_count
         FROM {RESULT_SCHEMA}.{RESULT_TABLE}
         WHERE run_id = ?
           AND status = 'FAIL'
-    """, [run_id]).collect()
+    """,
+        [run_id],
+    ).collect()
 
     if failures:
-        raise AssertionError(
-            f"Data quality tests failed for run_id {run_id}"
-        )
+        raise AssertionError(f"Data quality tests failed for run_id {run_id}")
+
 
 # ============================================================
 # 7. MINIMAL ENTRY POINT (CI / LOCAL MODE)
 # ============================================================
+
 
 def main():
     """
@@ -396,6 +400,7 @@ def main():
     In a worksheet, call run_all_tests(session) directly.
     """
     run_all_tests(session)
+
 
 # Execute when run as script
 if __name__ == "__main__":

@@ -7,7 +7,7 @@ from typing import Dict
 from engine.helpers import (
     run_sql_with_timing,
     insert_result_row,
-    validate_scd2_required_columns
+    validate_scd2_required_columns,
 )
 
 
@@ -27,12 +27,15 @@ def test_bk_not_null(session, meta: Dict, run_name: str):
         null_count = rows[0]["CNT"]
 
         insert_result_row(
-            session, meta, run_name, "BK_NOT_NULL",
+            session,
+            meta,
+            run_name,
+            "BK_NOT_NULL",
             sql_used=sql,
             passed=(null_count == 0),
             metrics={"null_count": null_count},
             error=None,
-            duration_ms=dur
+            duration_ms=dur,
         )
 
 
@@ -52,12 +55,15 @@ def test_pk_not_null(session, meta: Dict, run_name: str):
         null_count = rows[0]["CNT"]
 
         insert_result_row(
-            session, meta, run_name, "PK_NOT_NULL",
+            session,
+            meta,
+            run_name,
+            "PK_NOT_NULL",
             sql_used=sql,
             passed=(null_count == 0),
             metrics={"null_count": null_count},
             error=None,
-            duration_ms=dur
+            duration_ms=dur,
         )
 
 
@@ -79,12 +85,15 @@ def test_scd2_cols_not_null(session, meta: Dict, run_name: str):
         null_count = rows[0]["CNT"]
 
         insert_result_row(
-            session, meta, run_name, "SCD2_COLS_NOT_NULL",
+            session,
+            meta,
+            run_name,
+            "SCD2_COLS_NOT_NULL",
             sql_used=sql,
             passed=(null_count == 0),
             metrics={"null_count": null_count},
             error=None,
-            duration_ms=dur
+            duration_ms=dur,
         )
 
 
@@ -109,12 +118,15 @@ def test_sk_uniqueness(session, meta: Dict, run_name: str):
     dup_count = rows[0]["DUP"]
 
     insert_result_row(
-        session, meta, run_name, "SK_UNIQUENESS",
+        session,
+        meta,
+        run_name,
+        "SK_UNIQUENESS",
         sql_used=sql,
         passed=(dup_count == 0),
         metrics={"duplicate_sk": dup_count},
         error=None,
-        duration_ms=dur
+        duration_ms=dur,
     )
 
 
@@ -137,12 +149,15 @@ def test_no_future_dates(session, meta: Dict, run_name: str):
     future_rows = rows[0]["CNT"]
 
     insert_result_row(
-        session, meta, run_name, "NO_FUTURE_DATES",
+        session,
+        meta,
+        run_name,
+        "NO_FUTURE_DATES",
         sql_used=sql,
         passed=(future_rows == 0),
         metrics={"future_rows": future_rows},
         error=None,
-        duration_ms=dur
+        duration_ms=dur,
     )
 
 
@@ -164,10 +179,13 @@ def test_etl_batch_cols_not_null(session, meta: Dict, run_name: str):
         null_count = rows[0]["CNT"]
 
         insert_result_row(
-            session, meta, run_name, "ETL_BATCH_COLS_NOT_NULL",
+            session,
+            meta,
+            run_name,
+            "ETL_BATCH_COLS_NOT_NULL",
             sql_used=sql,
             passed=(null_count == 0),
             metrics={"null_count": null_count},
             error=None,
-            duration_ms=dur
+            duration_ms=dur,
         )

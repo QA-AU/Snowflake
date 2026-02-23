@@ -18,49 +18,39 @@ from Snowflake.snowpark import Session
 import json
 from typing import Dict, Any, Optional
 
-
-
 TABLE_TEST_META = {
     "CORE.ORDERS": {
         "parent_db": "SESAME",
         "business_date": "2025-11-13",
         "debug_mode": "YES",
         "version": "1.0.0",
-
         "table": {
             "schema": "CORE",
             "name": "ORDERS",
-
             "pk_columns": ["ORDER_ID", "LINE_NO"],
             "business_date_column": "BUSINESS_DATE",
-
             "date_columns": ["ORDER_DATE", "SHIP_DATE"],
             "timestamp_columns": ["CREATED_AT", "UPDATED_AT"],
-
             "trim_columns": ["CUSTOMER_NAME", "ADDRESS"],
             "clean_columns": ["NOTES", "COMMENTS"],
-
             "scd": {
                 "natural_key_columns": ["CUSTOMER_ID"],
                 "start_date_column": "VALID_FROM",
                 "end_date_column": "VALID_TO",
                 "current_flag_column": "IS_CURRENT",
-                "open_end_value": "9999-12-31"
+                "open_end_value": "9999-12-31",
             },
-
             "fk_relations": [
                 {
                     "fk_name": "FK_ORDERS_CUSTOMER",
                     "child_column": "CUSTOMER_ID",
                     "parent_schema": "CORE",
                     "parent_table": "CUSTOMERS",
-                    "parent_key_column": "CUSTOMER_ID"
+                    "parent_key_column": "CUSTOMER_ID",
                 }
             ],
-
-            "extra_filter": "STATUS = 'OPEN'"
+            "extra_filter": "STATUS = 'OPEN'",
         },
-
         "tests_to_run": [
             "BUSINESS_DATE_MATCH",
             "NON_ZERO_COUNT_FOR_BUSINESS_DATE",
@@ -71,16 +61,16 @@ TABLE_TEST_META = {
             "TRIMMED_COLS",
             "CLEANED_COLS",
             "SCD2_SINGLE_OPEN_RECORD",
-            "FOREIGN_KEY_ORPHANS"
-        ]
+            "FOREIGN_KEY_ORPHANS",
+        ],
     }
 }
-
 
 
 # ================================================================
 # INTERNAL HELPERS
 # ================================================================
+
 
 def _validate_metadata(md: Dict[str, Any]):
     """
@@ -105,12 +95,13 @@ def _validate_metadata(md: Dict[str, Any]):
 def _safe_json(v: Any) -> str:
     """Convert dict/list/string safely into escaped JSON string."""
     js = json.dumps(v)
-    return js.replace("'", "''")   # escape for Snowflake INSERT
+    return js.replace("'", "''")  # escape for Snowflake INSERT
 
 
 # ================================================================
 # CREATE TEMP TABLE (only once)   TABLE_TEST_META
 # ================================================================
+
 
 def _ensure_meta_table(session: Session):
     """
@@ -128,6 +119,7 @@ def _ensure_meta_table(session: Session):
 # ================================================================
 # MAIN LOADER
 # ================================================================
+
 
 def load_metadata(session: Session, metadata: Dict[str, Any]):
     """

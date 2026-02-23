@@ -34,10 +34,10 @@ def insert_result_row(
     passed: bool,
     metrics: Dict,
     error: str,
-    duration_ms: int
+    duration_ms: int,
 ):
     """
-    Inserts a single test result. 
+    Inserts a single test result.
     Uses $$ quoting for safe SQL.
     """
 
@@ -99,7 +99,7 @@ def validate_scd2_required_columns(meta: Dict):
         "end_dt",
         "business_date",
         "batch_id",
-        "last_updated_ts"
+        "last_updated_ts",
     ]
 
     return meta["table"].get("scd2_required_columns", default_required)

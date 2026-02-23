@@ -4,10 +4,7 @@
 # =========================================================
 
 from typing import Dict
-from engine.helpers import (
-    run_sql_with_timing,
-    insert_result_row
-)
+from engine.helpers import run_sql_with_timing, insert_result_row
 
 
 # =========================================================
@@ -17,7 +14,7 @@ def test_col_allowed_values(session, meta: Dict, run_name: str):
     """
     Validates that each configured column only contains values from
     a specified allowed list (including optional NULL).
-    
+
     Metadata format:
         "allowed_values": {
             "STATUS": ["A", "I", null],
@@ -29,9 +26,7 @@ def test_col_allowed_values(session, meta: Dict, run_name: str):
 
     for col, allowed_list in allowed_cfg.items():
         # Build list of values ('X', 'Y', NULL)
-        formatted = ",".join(
-            ["NULL" if v is None else f"'{v}'" for v in allowed_list]
-        )
+        formatted = ",".join(["NULL" if v is None else f"'{v}'" for v in allowed_list])
 
         sql = f"""
             SELECT COUNT(*) AS CNT
@@ -44,12 +39,15 @@ def test_col_allowed_values(session, meta: Dict, run_name: str):
         invalid = rows[0]["CNT"]
 
         insert_result_row(
-            session, meta, run_name, "COL_ALLOWED_VALUES",
+            session,
+            meta,
+            run_name,
+            "COL_ALLOWED_VALUES",
             sql_used=sql,
             passed=(invalid == 0),
             metrics={"invalid_rows": invalid, "column": col},
             error=None,
-            duration_ms=dur
+            duration_ms=dur,
         )
 
 
@@ -63,7 +61,7 @@ def test_col_whitespace_clean(session, meta: Dict, run_name: str):
         - newline (\n)
         - carriage return (\r)
         - tabs (\t)
-    
+
     Metadata:
         "whitespace_columns": ["NAME", "DESC"]
     """
@@ -84,12 +82,15 @@ def test_col_whitespace_clean(session, meta: Dict, run_name: str):
         issues = rows[0]["CNT"]
 
         insert_result_row(
-            session, meta, run_name, "COL_WHITESPACE_CLEAN",
+            session,
+            meta,
+            run_name,
+            "COL_WHITESPACE_CLEAN",
             sql_used=sql,
             passed=(issues == 0),
             metrics={"bad_whitespace_rows": issues, "column": col},
             error=None,
-            duration_ms=dur
+            duration_ms=dur,
         )
 
 
@@ -99,7 +100,7 @@ def test_col_whitespace_clean(session, meta: Dict, run_name: str):
 def test_col_range_validation(session, meta: Dict, run_name: str):
     """
     Validates that numeric values fall within configured min/max ranges.
-    
+
     Metadata:
         "numeric_ranges": {
             "AMOUNT": {"min": 0, "max": 999999.99},
@@ -124,10 +125,13 @@ def test_col_range_validation(session, meta: Dict, run_name: str):
         bad_rows = rows[0]["CNT"]
 
         insert_result_row(
-            session, meta, run_name, "COL_RANGE_VALIDATION",
+            session,
+            meta,
+            run_name,
+            "COL_RANGE_VALIDATION",
             sql_used=sql,
             passed=(bad_rows == 0),
             metrics={"out_of_range": bad_rows, "column": col},
             error=None,
-            duration_ms=dur
+            duration_ms=dur,
         )

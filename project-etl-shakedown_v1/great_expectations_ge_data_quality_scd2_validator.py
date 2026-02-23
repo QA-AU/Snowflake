@@ -43,7 +43,7 @@ SNOWFLAKE_ENV = {
         "SCHEMA": "DIM",
         "USER": "svc_ge_dev",
         "PASSWORD": os.getenv("SF_DEV_PWD"),
-        "WAREHOUSE": "WH_DEV"
+        "WAREHOUSE": "WH_DEV",
     },
     "TEST": {
         "ACCOUNT": "acct_test",
@@ -51,7 +51,7 @@ SNOWFLAKE_ENV = {
         "SCHEMA": "DIM",
         "USER": "svc_ge_test",
         "PASSWORD": os.getenv("SF_TEST_PWD"),
-        "WAREHOUSE": "WH_TEST"
+        "WAREHOUSE": "WH_TEST",
     },
     "PROD": {
         "ACCOUNT": "acct_prod",
@@ -59,8 +59,8 @@ SNOWFLAKE_ENV = {
         "SCHEMA": "DIM",
         "USER": "svc_ge_prod",
         "PASSWORD": os.getenv("SF_PROD_PWD"),
-        "WAREHOUSE": "WH_PROD"
-    }
+        "WAREHOUSE": "WH_PROD",
+    },
 }[ENV]
 
 # ============================================================
@@ -74,25 +74,18 @@ TABLES = [
         "asset": "dim_customer",
         "table": "DIM_CUSTOMER",
         "pk": "customer_id",
-
         # Column range checks (DQ-COL-001)
-        "ranges": {
-            "age": (0, 120)
-        },
-
+        "ranges": {"age": (0, 120)},
         # Regex / pattern checks (DQ-COL-002)
-        "regex": {
-            "email": r"^[^@]+@[^@]+\.[^@]+$"
-        },
-
+        "regex": {"email": r"^[^@]+@[^@]+\.[^@]+$"},
         # Foreign key integrity checks (DQ-FK-001)
         "foreign_keys": [
             {
                 "column": "country_id",
                 "ref_table": "DIM_COUNTRY",
-                "ref_column": "country_id"
+                "ref_column": "country_id",
             }
-        ]
+        ],
     }
 ]
 
@@ -111,7 +104,7 @@ sf_source = context.sources.add_or_update_snowflake(
         f"{SNOWFLAKE_ENV['DATABASE']}/"
         f"{SNOWFLAKE_ENV['SCHEMA']}?"
         f"warehouse={SNOWFLAKE_ENV['WAREHOUSE']}"
-    )
+    ),
 )
 
 # Register table assets (idempotent metadata registration)
@@ -119,12 +112,13 @@ for table in TABLES:
     sf_source.add_table_asset(
         name=table["asset"],
         table_name=table["table"],
-        schema_name=SNOWFLAKE_ENV["SCHEMA"]
+        schema_name=SNOWFLAKE_ENV["SCHEMA"],
     )
 
 # ============================================================
 # 4. VALIDATION HELPERS
 # ============================================================
+
 
 def get_validator(asset_name):
     """
@@ -136,11 +130,7 @@ def get_validator(asset_name):
     - Schema
     - Table
     """
-    batch_request = (
-        sf_source
-        .get_asset(asset_name)
-        .build_batch_request()
-    )
+    batch_request = sf_source.get_asset(asset_name).build_batch_request()
     return context.get_validator(batch_request=batch_request)
 
 
@@ -184,9 +174,7 @@ def run_standard_dq_checks(validator, meta):
     # DQ Dimension: Validity, Accuracy
     # --------------------------------------------------------
     for col, (min_val, max_val) in meta["ranges"].items():
-        validator.expect_column_values_to_be_between(
-            col, min_val, max_val
-        )
+        validator.expect_column_values_to_be_between(col, min_val, max_val)
 
     # --------------------------------------------------------
     # TEST CASE ID: DQ-COL-002
@@ -268,6 +256,7 @@ def run_scd2_checks(validator):
         WHERE is_deleted = 1
           AND valid_to IS NULL
     """)
+
 
 # ============================================================
 # 5. EXECUTION LOOP

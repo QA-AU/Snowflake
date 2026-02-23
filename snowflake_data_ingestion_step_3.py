@@ -14,18 +14,20 @@ import pandas as pd
 
 # ---------- RUNTIME SELECTION (choose ONE path; same as Step 2) ----------
 # Option A: target-driven
-RUN_TLAYER    = "tgt_dw"         # target schema (also where META_COLUMNS lives)
-RUN_TGT_TABLE = "dim_customer"   # target table to process
+RUN_TLAYER = "tgt_dw"  # target schema (also where META_COLUMNS lives)
+RUN_TGT_TABLE = "dim_customer"  # target table to process
 
 # Option B: source-driven
-RUN_SLAYER    = None             # e.g., "src_stg"
-RUN_SRC_TABLE = None             # e.g., "customer_stg"
+RUN_SLAYER = None  # e.g., "src_stg"
+RUN_SRC_TABLE = None  # e.g., "customer_stg"
 
 # Optional runtime window (often NOT used on target, but supported if you want symmetry)
-WINDOW_PREDICATE = None          # e.g., "load_date = '2025-08-18'"
+WINDOW_PREDICATE = None  # e.g., "load_date = '2025-08-18'"
 
 # Sanity: Snowpark session must exist
-assert 'session' in globals(), "ERROR: Snowflake session not found. Ensure the Notebook created a Snowpark session."
+assert (
+    "session" in globals()
+), "ERROR: Snowflake session not found. Ensure the Notebook created a Snowpark session."
 
 
 # ----------------------------------------------------------------------
@@ -50,7 +52,9 @@ elif RUN_SLAYER and RUN_SRC_TABLE:
           AND UPPER(srctablename)=UPPER('{RUN_SRC_TABLE}')
     """
 else:
-    raise SystemExit("ERROR: Provide either (RUN_TLAYER & RUN_TGT_TABLE) OR (RUN_SLAYER & RUN_SRC_TABLE).")
+    raise SystemExit(
+        "ERROR: Provide either (RUN_TLAYER & RUN_TGT_TABLE) OR (RUN_SLAYER & RUN_SRC_TABLE)."
+    )
 
 mapping = session.sql(map_sql).to_pandas()
 if mapping.empty:
@@ -58,9 +62,9 @@ if mapping.empty:
 if len(mapping) > 1:
     raise SystemExit(f"ERROR: Multiple mappings found for {ident}; refine selection.")
 
-SLAYER   = mapping.iloc[0]["SLAYER"]
+SLAYER = mapping.iloc[0]["SLAYER"]
 SRCTABLE = mapping.iloc[0]["SRCTABLENAME"]
-TLAYER   = mapping.iloc[0]["TLAYER"]
+TLAYER = mapping.iloc[0]["TLAYER"]
 TGTTABLE = mapping.iloc[0]["TGTTABLE"]
 
 print(f"✓ Using mapping: {SLAYER}.{SRCTABLE} → {TLAYER}.{TGTTABLE}")
@@ -81,27 +85,45 @@ WHERE UPPER(slayer)=UPPER('{SLAYER}')
 """
 meta = session.sql(meta_sql).to_pandas()
 if meta.empty:
-    raise SystemExit(f"ERROR: No META rows for mapping {SLAYER}.{SRCTABLE} → {TLAYER}.{TGTTABLE}")
+    raise SystemExit(
+        f"ERROR: No META rows for mapping {SLAYER}.{SRCTABLE} → {TLAYER}.{TGTTABLE}"
+    )
 
 # Derive roles (TARGET side uses tgtcolumnname)
-pk_cols_tgt     = meta.loc[meta["PRIMARYKEY"].str.upper()=="Y", "TGTCOLUMNNAME"].str.upper().tolist()
-ignore_cols_tgt = meta.loc[meta["IGNORE_ROW"].str.upper()=="Y", "TGTCOLUMNNAME"].str.upper().tolist()
-use_scd2_cols   = meta.loc[meta["USE_SCD2"].str.upper()=="Y", "TGTCOLUMNNAME"].str.upper().tolist()
-is_filter_cols  = meta.loc[meta["IS_FILTER"].str.upper()=="Y", "TGTCOLUMNNAME"].str.upper().tolist()
+pk_cols_tgt = (
+    meta.loc[meta["PRIMARYKEY"].str.upper() == "Y", "TGTCOLUMNNAME"]
+    .str.upper()
+    .tolist()
+)
+ignore_cols_tgt = (
+    meta.loc[meta["IGNORE_ROW"].str.upper() == "Y", "TGTCOLUMNNAME"]
+    .str.upper()
+    .tolist()
+)
+use_scd2_cols = (
+    meta.loc[meta["USE_SCD2"].str.upper() == "Y", "TGTCOLUMNNAME"].str.upper().tolist()
+)
+is_filter_cols = (
+    meta.loc[meta["IS_FILTER"].str.upper() == "Y", "TGTCOLUMNNAME"].str.upper().tolist()
+)
 
 # Mode (table-level)
 mode_vals = meta["HISTORY"].str.upper().unique().tolist()
 if len(mode_vals) != 1:
-    raise SystemExit("ERROR: Mixed HISTORY flags in META (should be uniform per table).")
+    raise SystemExit(
+        "ERROR: Mixed HISTORY flags in META (should be uniform per table)."
+    )
 MODE = "HISTORY" if mode_vals[0] == "Y" else "SCD2"
 
 # Lifecycle column presence on mapping names (for info)
 has_from = (meta["TGTCOLUMNNAME"].str.lower() == "from_date").any()
-has_end  = (meta["TGTCOLUMNNAME"].str.lower() == "end_date").any()
-has_iscur = "IS_CURRENT" in meta["TGTCOLUMNNAME"].str.upper().tolist()  # optional column in target
+has_end = (meta["TGTCOLUMNNAME"].str.lower() == "end_date").any()
+has_iscur = (
+    "IS_CURRENT" in meta["TGTCOLUMNNAME"].str.upper().tolist()
+)  # optional column in target
 
 from_col = "FROM_DATE" if has_from else None
-end_col  = "END_DATE"  if has_end  else None
+end_col = "END_DATE" if has_end else None
 is_current_col = "IS_CURRENT" if has_iscur else None
 
 # Free-text target filter (first non-null if present)
@@ -109,10 +131,16 @@ t_filters = meta["T_FILTER"].dropna().astype(str).str.strip()
 t_filter_expr = t_filters.iloc[0] if not t_filters.empty and t_filters.iloc[0] else None
 
 # Select list = all non-ignored target columns (upper-cased)
-select_cols_tgt = meta.loc[meta["IGNORE_ROW"].str.upper()!="Y", "TGTCOLUMNNAME"].str.upper().tolist()
+select_cols_tgt = (
+    meta.loc[meta["IGNORE_ROW"].str.upper() != "Y", "TGTCOLUMNNAME"]
+    .str.upper()
+    .tolist()
+)
 select_cols_tgt = list(dict.fromkeys(select_cols_tgt))
 if not select_cols_tgt:
-    raise SystemExit("ERROR: No selectable target columns (all rows are ignored) in META.")
+    raise SystemExit(
+        "ERROR: No selectable target columns (all rows are ignored) in META."
+    )
 
 
 # ----------------------------------------------------------------------
@@ -138,7 +166,7 @@ WHERE UPPER(TABLE_SCHEMA)=UPPER('{TLAYER}')
 tgt_cols = set(cols_df["COL"].tolist())
 
 required = set(pk_cols_tgt + select_cols_tgt)
-missing  = sorted(required - tgt_cols)
+missing = sorted(required - tgt_cols)
 if missing:
     raise SystemExit(f"ERROR: Missing target columns in {TLAYER}.{TGTTABLE}: {missing}")
 
@@ -154,7 +182,9 @@ if MODE == "SCD2":
         can_identify_open = True
         open_predicate = "END_DATE = DATE '9999-12-31'"
     else:
-        print("WARNING: SCD2 mode but no IS_CURRENT or END_DATE in target — will scan full table.")
+        print(
+            "WARNING: SCD2 mode but no IS_CURRENT or END_DATE in target — will scan full table."
+        )
 
 
 # ----------------------------------------------------------------------
@@ -203,9 +233,11 @@ rows_total = session.sql("SELECT COUNT(*) AS C FROM TGT_SLICE").to_pandas()["C"]
 # PK quality on target slice
 if pk_cols_tgt:
     null_pred = " OR ".join([f"{c} IS NULL" for c in pk_cols_tgt])
-    null_pk   = session.sql(f"SELECT COUNT(*) AS C FROM TGT_SLICE WHERE {null_pred}").to_pandas()["C"][0]
-    pk_list   = ", ".join(pk_cols_tgt)
-    dup_pk    = session.sql(f"""
+    null_pk = session.sql(
+        f"SELECT COUNT(*) AS C FROM TGT_SLICE WHERE {null_pred}"
+    ).to_pandas()["C"][0]
+    pk_list = ", ".join(pk_cols_tgt)
+    dup_pk = session.sql(f"""
         SELECT COUNT(*) AS C
         FROM (
             SELECT {pk_list}, COUNT(*) AS CNT
@@ -214,9 +246,13 @@ if pk_cols_tgt:
             HAVING COUNT(*) > 1
         )
     """).to_pandas()["C"][0]
-    distinct_pk = session.sql(f"SELECT COUNT(*) AS C FROM (SELECT DISTINCT {pk_list} FROM TGT_SLICE)").to_pandas()["C"][0]
+    distinct_pk = session.sql(
+        f"SELECT COUNT(*) AS C FROM (SELECT DISTINCT {pk_list} FROM TGT_SLICE)"
+    ).to_pandas()["C"][0]
     if dup_pk > 0:
-        raise SystemExit(f"ERROR: Duplicate PKs in target slice for {TLAYER}.{TGTTABLE}. Duplicate groups={dup_pk}")
+        raise SystemExit(
+            f"ERROR: Duplicate PKs in target slice for {TLAYER}.{TGTTABLE}. Duplicate groups={dup_pk}"
+        )
 else:
     null_pk = dup_pk = distinct_pk = 0
 
@@ -224,10 +260,14 @@ else:
 open_cnt = closed_cnt = None
 if MODE == "SCD2":
     if "IS_CURRENT" in tgt_cols:
-        open_cnt   = session.sql("SELECT COUNT(*) AS C FROM TGT_SLICE WHERE UPPER(IS_CURRENT)='Y'").to_pandas()["C"][0]
+        open_cnt = session.sql(
+            "SELECT COUNT(*) AS C FROM TGT_SLICE WHERE UPPER(IS_CURRENT)='Y'"
+        ).to_pandas()["C"][0]
         closed_cnt = rows_total - open_cnt
     elif "END_DATE" in tgt_cols:
-        open_cnt   = session.sql("SELECT COUNT(*) AS C FROM TGT_SLICE WHERE END_DATE = DATE '9999-12-31'").to_pandas()["C"][0]
+        open_cnt = session.sql(
+            "SELECT COUNT(*) AS C FROM TGT_SLICE WHERE END_DATE = DATE '9999-12-31'"
+        ).to_pandas()["C"][0]
         closed_cnt = rows_total - open_cnt
 
 # Summary print
@@ -241,10 +281,12 @@ print(f"Selected cols: {select_cols_tgt}")
 print(f"PK cols      : {pk_cols_tgt if pk_cols_tgt else 'NONE'}")
 print(f"Rows (total) : {rows_total}")
 if pk_cols_tgt:
-    print(f"PK distinct  : {distinct_pk} | PK null rows : {null_pk} | PK duplicate groups : {dup_pk}")
+    print(
+        f"PK distinct  : {distinct_pk} | PK null rows : {null_pk} | PK duplicate groups : {dup_pk}"
+    )
 if MODE == "SCD2":
     have_iscur = "Y" if "IS_CURRENT" in tgt_cols else "N"
-    have_end   = "Y" if "END_DATE" in tgt_cols else "N"
+    have_end = "Y" if "END_DATE" in tgt_cols else "N"
     print(f"Lifecycle    : is_current={have_iscur}, end_date={have_end}")
     if open_cnt is not None:
         print(f"Open/Closed  : OPEN={open_cnt} | CLOSED={closed_cnt}")

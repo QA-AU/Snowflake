@@ -4,10 +4,7 @@
 # =========================================================
 
 from typing import Dict
-from engine.helpers import (
-    run_sql_with_timing,
-    insert_result_row
-)
+from engine.helpers import run_sql_with_timing, insert_result_row
 
 
 # =========================================================
@@ -57,7 +54,10 @@ def test_fk_relation_check(session, meta: Dict, run_name: str):
         mismatch = rows[0]["CNT"]
 
         insert_result_row(
-            session, meta, run_name, "FK_RELATION_CHECK",
+            session,
+            meta,
+            run_name,
+            "FK_RELATION_CHECK",
             sql_used=sql,
             passed=(mismatch == 0),
             metrics={
@@ -67,7 +67,7 @@ def test_fk_relation_check(session, meta: Dict, run_name: str):
                 "parent_column": parent_col,
             },
             error=None,
-            duration_ms=dur
+            duration_ms=dur,
         )
 
 
@@ -77,7 +77,7 @@ def test_fk_relation_check(session, meta: Dict, run_name: str):
 def test_orphan_records_check(session, meta: Dict, run_name: str):
     """
     Detects FACT → DIM orphan references.
-    
+
     Metadata format:
         "orphan_checks": [
             {
@@ -117,7 +117,10 @@ def test_orphan_records_check(session, meta: Dict, run_name: str):
         orphan_count = rows[0]["CNT"]
 
         insert_result_row(
-            session, meta, run_name, "ORPHAN_RECORDS_CHECK",
+            session,
+            meta,
+            run_name,
+            "ORPHAN_RECORDS_CHECK",
             sql_used=sql,
             passed=(orphan_count == 0),
             metrics={
@@ -128,5 +131,5 @@ def test_orphan_records_check(session, meta: Dict, run_name: str):
                 "dim_column": dim_col,
             },
             error=None,
-            duration_ms=dur
+            duration_ms=dur,
         )

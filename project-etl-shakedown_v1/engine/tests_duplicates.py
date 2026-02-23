@@ -4,10 +4,7 @@
 # =========================================================
 
 from typing import Dict
-from engine.helpers import (
-    run_sql_with_timing,
-    insert_result_row
-)
+from engine.helpers import run_sql_with_timing, insert_result_row
 
 
 # =========================================================
@@ -16,7 +13,7 @@ from engine.helpers import (
 def test_duplicate_rows_bk(session, meta: Dict, run_name: str):
     """
     Detect duplicate Business Key entries.
-    
+
     A BK should uniquely identify a logical business entity.
     If a BK repeats more than once, it indicates data quality issues
     or incorrect SCD2 processing.
@@ -26,12 +23,15 @@ def test_duplicate_rows_bk(session, meta: Dict, run_name: str):
 
     if not bk_cols:
         insert_result_row(
-            session, meta, run_name, "DUPLICATE_ROWS_BK",
+            session,
+            meta,
+            run_name,
+            "DUPLICATE_ROWS_BK",
             sql_used="",
             passed=False,
             metrics={},
             error="Metadata missing bk_columns for duplicate check.",
-            duration_ms=0
+            duration_ms=0,
         )
         return
 
@@ -51,12 +51,15 @@ def test_duplicate_rows_bk(session, meta: Dict, run_name: str):
     dup_groups = rows[0]["CNT"]
 
     insert_result_row(
-        session, meta, run_name, "DUPLICATE_ROWS_BK",
+        session,
+        meta,
+        run_name,
+        "DUPLICATE_ROWS_BK",
         sql_used=sql,
         passed=(dup_groups == 0),
         metrics={"duplicate_groups": dup_groups},
         error=None,
-        duration_ms=dur
+        duration_ms=dur,
     )
 
 
@@ -79,23 +82,29 @@ def test_duplicate_rows_bk_scd2(session, meta: Dict, run_name: str):
 
     if not bk_cols:
         insert_result_row(
-            session, meta, run_name, "DUPLICATE_ROWS_BK_SCD2",
+            session,
+            meta,
+            run_name,
+            "DUPLICATE_ROWS_BK_SCD2",
             sql_used="",
             passed=False,
             metrics={},
             error="Metadata missing bk_columns for SCD2 duplicate check.",
-            duration_ms=0
+            duration_ms=0,
         )
         return
 
     if not scd_cols:
         insert_result_row(
-            session, meta, run_name, "DUPLICATE_ROWS_BK_SCD2",
+            session,
+            meta,
+            run_name,
+            "DUPLICATE_ROWS_BK_SCD2",
             sql_used="",
             passed=False,
             metrics={},
             error="Metadata missing scd2_columns for SCD2 duplicate check.",
-            duration_ms=0
+            duration_ms=0,
         )
         return
 
@@ -117,10 +126,13 @@ def test_duplicate_rows_bk_scd2(session, meta: Dict, run_name: str):
     dup_groups = rows[0]["CNT"]
 
     insert_result_row(
-        session, meta, run_name, "DUPLICATE_ROWS_BK_SCD2",
+        session,
+        meta,
+        run_name,
+        "DUPLICATE_ROWS_BK_SCD2",
         sql_used=sql,
         passed=(dup_groups == 0),
         metrics={"duplicate_groups": dup_groups},
         error=None,
-        duration_ms=dur
+        duration_ms=dur,
     )

@@ -12,10 +12,7 @@ from engine.helpers import insert_result_row
 # =========================================================
 # Orchestrator: run_shakedown
 # =========================================================
-def run_shakedown(session,
-                  table_fqn: str,
-                  business_date: str,
-                  debug: bool = False):
+def run_shakedown(session, table_fqn: str, business_date: str, debug: bool = False):
     """
     Main orchestration function for running the complete table shakedown
     against a single table for a given business_date.
@@ -78,12 +75,15 @@ def run_shakedown(session,
         # Validate existence in registry
         if test_name not in TEST_REGISTRY:
             insert_result_row(
-                session, meta, run_name, test_name,
+                session,
+                meta,
+                run_name,
+                test_name,
                 sql_used="",
                 passed=False,
                 metrics={},
                 error=f"Test '{test_name}' not found in registry.",
-                duration_ms=0
+                duration_ms=0,
             )
             if debug:
                 print(f"[ERROR] Test '{test_name}' not found in registry.")
@@ -104,12 +104,15 @@ def run_shakedown(session,
             err = str(ex)
 
             insert_result_row(
-                session, meta, run_name, test_name,
+                session,
+                meta,
+                run_name,
+                test_name,
                 sql_used="",
                 passed=False,
                 metrics={},
                 error=err,
-                duration_ms=0
+                duration_ms=0,
             )
 
             if debug:

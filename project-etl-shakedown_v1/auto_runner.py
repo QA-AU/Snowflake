@@ -59,10 +59,12 @@ def _extract_table_fqn_from_metadata(session, json_path: str) -> str:
 # =========================================================
 # Auto-Runner
 # =========================================================
-def auto_runner(session,
-                business_date: str,
-                tables_filter: Optional[List[str]] = None,
-                debug: bool = False):
+def auto_runner(
+    session,
+    business_date: str,
+    tables_filter: Optional[List[str]] = None,
+    debug: bool = False,
+):
     """
     Automatically discovers *all* metadata JSON files in @temp_config_stage
     and runs shakedown tests for each table.
@@ -97,7 +99,8 @@ def auto_runner(session,
 
     if tables_filter:
         metadata_files = [
-            f for f in metadata_files
+            f
+            for f in metadata_files
             if any(t.lower() in f.lower() for t in tables_filter)
         ]
         if debug:
@@ -122,7 +125,7 @@ def auto_runner(session,
                 session=session,
                 table_fqn=table_fqn,
                 business_date=business_date,
-                debug=debug
+                debug=debug,
             )
 
             results[table_fqn] = df

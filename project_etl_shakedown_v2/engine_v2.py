@@ -1,4 +1,3 @@
-
 # """helpers.py - Shared utility functions for the full data quality engine."""
 #  STEP 2
 
@@ -7,9 +6,6 @@ from snowflake.snowpark import Session
 import json
 import time
 from typing import Optional, Dict, Any, List
-
-
-
 
 
 def run_sql_timed(session, sql, debug, test_name):
@@ -36,7 +32,7 @@ def run_sql_timed(session, sql, debug, test_name):
     return rows, duration_ms
 
 
-# Produces fully-qualified table names 
+# Produces fully-qualified table names
 def build_fqn(parent_db, schema, table):
     """
     Builds a fully-qualified table name:
@@ -57,7 +53,6 @@ def build_fqn(parent_db, schema, table):
     return f"{parent_db}.{schema}.{table}"
 
 
-
 # -------------------------
 # SQL literal escaping
 # -------------------------
@@ -65,6 +60,7 @@ def escape_sql_literal(val: Optional[str]) -> str:
     if val is None:
         return "NULL"
     return "'" + str(val).replace("'", "''") + "'"
+
 
 # -------------------------
 # Boolean / numeric to SQL
@@ -74,10 +70,12 @@ def bool_to_sql(flag: Optional[bool]) -> str:
         return "NULL"
     return "TRUE" if flag else "FALSE"
 
+
 def num_to_sql(v: Optional[Any]) -> str:
     if v is None:
         return "NULL"
     return str(v)
+
 
 # -------------------------
 # JSON metrics formatting
@@ -89,17 +87,20 @@ def metrics_to_sql(metrics: Optional[Dict[str, Any]]) -> str:
     js = js.replace("'", "''")
     return f"'{js}'"
 
+
 # -------------------------
 # Construct FQN
 # -------------------------
 def fqn(db: str, schema: str, table: str) -> str:
     return f"{db}.{schema}.{table}"
 
+
 # -------------------------
 # Business date rule:
 # -------------------------
 def should_apply_business_date(bd: Optional[str]) -> bool:
     return bd not in (None, "1900-01-01")
+
 
 # -------------------------
 # WHERE clause builder
@@ -109,7 +110,7 @@ def build_where_clause(
     date_filter: Optional[str],
     bd_col: Optional[str],
     bd_val: Optional[str],
-    use_bd: bool
+    use_bd: bool,
 ) -> str:
     clauses: List[str] = []
 
@@ -128,6 +129,7 @@ def build_where_clause(
     wrapped = [f"({c})" for c in clauses]
     return "WHERE " + " AND ".join(wrapped)
 
+
 # -------------------------
 # SQL execution with timing
 # -------------------------
@@ -143,6 +145,7 @@ def run_sql_with_timing(session: Session, sql: str, debug: bool, test_name: str)
         print(f"[DEBUG][{test_name}] Completed in {dur_ms} ms, rows={len(rows)}")
 
     return rows, dur_ms
+
 
 # -------------------------
 # Result insertion
@@ -160,7 +163,7 @@ def insert_result(
     pass_flag: Optional[bool],
     error: Optional[str],
     duration_ms: Optional[int],
-    debug: bool
+    debug: bool,
 ):
 
     if debug:
@@ -223,7 +226,7 @@ def ensure_results_table(session: Session):
     """).collect()
 
 
-#######  META DATA LOADER 
+#######  META DATA LOADER
 
 # """metadata_loader.py - Loads and normalizes table test metadata for the engine."""
 
@@ -232,6 +235,7 @@ import os
 from typing import Dict, Any, Optional
 
 DEFAULT_VERSION = "1.0"
+
 
 # -----------------------------
 # Load metadata from a JSON file
@@ -245,11 +249,13 @@ def load_metadata_from_file(path: str) -> Dict[str, Any]:
 
     return normalize_metadata(data)
 
+
 # -----------------------------
 # Load metadata from a dict
 # -----------------------------
 def load_metadata_from_dict(meta: Dict[str, Any]) -> Dict[str, Any]:
     return normalize_metadata(meta)
+
 
 # -----------------------------
 # Normalize and validate metadata
@@ -286,10 +292,11 @@ def normalize_metadata(meta: Dict[str, Any]) -> Dict[str, Any]:
             "valid_value_tests": table.get("valid_value_tests", []),
             "scd": table.get("scd", {}),
             "fk_relations": table.get("fk_relations", []),
-            "extra_filter": table.get("extra_filter")
-        }
+            "extra_filter": table.get("extra_filter"),
+        },
     }
     return meta_normalized
+
 
 # -----------------------------
 # Optional: auto-discover JSON files
@@ -308,11 +315,12 @@ def discover_metadata_files(directory: str) -> Dict[str, Dict[str, Any]]:
 
 
 ###### EXECUTION ENGINE V1   ###########
- 
-######## 1 test_business_date_match 
+
+######## 1 test_business_date_match
 
 # from helpers import run_sql_with_timing, insert_result, build_where_clause, fqn
 # Test 1 : test_business_date_match
+
 
 def test_business_date_match(session, cfg, run_name, bd, use_bd, debug):
     test_name = "BUSINESS_DATE_MATCH"
@@ -326,20 +334,23 @@ def test_business_date_match(session, cfg, run_name, bd, use_bd, debug):
 
     if bd is None:
         insert_result(
-            session, run_name, db, schema, table, bd,
-            test_name, None, None, False,
+            session,
+            run_name,
+            db,
+            schema,
+            table,
+            bd,
+            test_name,
+            None,
+            None,
+            False,
             "business_date is required for BUSINESS_DATE_MATCH",
-            None, debug
+            None,
+            debug,
         )
         return
 
-    where_clause = build_where_clause(
-        extra,
-        date_filter,
-        bd_col,
-        bd,
-        use_bd
-    )
+    where_clause = build_where_clause(extra, date_filter, bd_col, bd, use_bd)
 
     sql = f"SELECT COUNT(*) AS CNT FROM {full} {where_clause}"
 
@@ -348,23 +359,35 @@ def test_business_date_match(session, cfg, run_name, bd, use_bd, debug):
         cnt = rows[0]["CNT"] if rows else 0
 
         insert_result(
-            session, run_name, db, schema, table, bd,
-            test_name, sql,
+            session,
+            run_name,
+            db,
+            schema,
+            table,
+            bd,
+            test_name,
+            sql,
             {"CNT": cnt},
             cnt > 0,
             None,
             dur,
-            debug
+            debug,
         )
     except Exception as e:
         insert_result(
-            session, run_name, db, schema, table, bd,
-            test_name, sql,
+            session,
+            run_name,
+            db,
+            schema,
+            table,
+            bd,
+            test_name,
+            sql,
             None,
             False,
             str(e)[:4000],
             None,
-            debug
+            debug,
         )
 
 
@@ -375,6 +398,7 @@ def test_business_date_match(session, cfg, run_name, bd, use_bd, debug):
 # Ensures that for the given business date filter, the table returns at least one row.
 # NON_ZERO_COUNT_FOR_BUSINESS_DATE"  test_pk_null_check
 # from helpers import run_sql_with_timing, insert_result, build_where_clause, fqn
+
 
 def test_non_zero_count(session, cfg, run_name, bd, use_bd, debug):
     test_name = "NON_ZERO_COUNT_FOR_BUSINESS_DATE"
@@ -409,13 +433,7 @@ def test_non_zero_count(session, cfg, run_name, bd, use_bd, debug):
         return
 
     # Build WHERE clause with BD rule
-    where_clause = build_where_clause(
-        extra,
-        date_filter,
-        bd_col,
-        bd,
-        use_bd
-    )
+    where_clause = build_where_clause(extra, date_filter, bd_col, bd, use_bd)
 
     sql = f"SELECT COUNT(*) AS CNT FROM {full} {where_clause}"
 
@@ -457,11 +475,11 @@ def test_non_zero_count(session, cfg, run_name, bd, use_bd, debug):
         )
 
 
-# 3 Test: PK_NOT_NULL 
+# 3 Test: PK_NOT_NULL
 # Ensures that primary key columns contain no NULL values for the filtered dataset.
 # test_pk_null_check
 # from helpers import run_sql_with_timing, insert_result, build_where_clause, fqn
-# Fix later 
+# Fix later
 def test_pk_not_nullX(session, cfg, run_name, bd, use_bd, debug):
     test_name = "PK_NOT_NULL"
 
@@ -479,9 +497,19 @@ def test_pk_not_nullX(session, cfg, run_name, bd, use_bd, debug):
     # PK list is mandatory
     if not pks:
         insert_result(
-            session, run_name, db, schema, table, bd,
-            test_name, None, None, False,
-            "pk_columns missing for PK_NOT_NULL", None, debug
+            session,
+            run_name,
+            db,
+            schema,
+            table,
+            bd,
+            test_name,
+            None,
+            None,
+            False,
+            "pk_columns missing for PK_NOT_NULL",
+            None,
+            debug,
         )
         return
 
@@ -504,26 +532,37 @@ def test_pk_not_nullX(session, cfg, run_name, bd, use_bd, debug):
         cnt = rows[0]["NULL_PK_CNT"] if rows else 0
 
         insert_result(
-            session, run_name, db, schema, table, bd,
-            test_name, sql,
+            session,
+            run_name,
+            db,
+            schema,
+            table,
+            bd,
+            test_name,
+            sql,
             {"NULL_PK_CNT": cnt},
             cnt == 0,
             None,
             dur,
-            debug
+            debug,
         )
 
     except Exception as e:
         insert_result(
-            session, run_name, db, schema, table, bd,
-            test_name, sql,
+            session,
+            run_name,
+            db,
+            schema,
+            table,
+            bd,
+            test_name,
+            sql,
             None,
             False,
             str(e)[:4000],
             None,
-            debug
+            debug,
         )
-
 
 
 # 4 test_structural_duplicates.py
@@ -536,14 +575,8 @@ def test_pk_not_nullX(session, cfg, run_name, bd, use_bd, debug):
 #     build_where_clause
 # )
 
-def test_structural_duplicates(
-    session,
-    cfg,
-    run_name,
-    business_date,
-    use_bd,
-    debug
-):
+
+def test_structural_duplicates(session, cfg, run_name, business_date, use_bd, debug):
     test_name = "STRUCTURAL_DUPLICATES"
 
     schema = cfg["schema"]
@@ -557,9 +590,19 @@ def test_structural_duplicates(
 
     if not pk_cols:
         insert_result(
-            session, run_name, cfg["parent_db"], schema, table, business_date,
-            test_name, None, None, False,
-            "PK columns not defined", None, debug
+            session,
+            run_name,
+            cfg["parent_db"],
+            schema,
+            table,
+            business_date,
+            test_name,
+            None,
+            None,
+            False,
+            "PK columns not defined",
+            None,
+            debug,
         )
         return
 
@@ -587,14 +630,36 @@ def test_structural_duplicates(
         metrics = {"DUP_CNT": dup_cnt}
 
         insert_result(
-            session, run_name, cfg["parent_db"], schema, table, business_date,
-            test_name, sql, metrics, passed, None, dur, debug
+            session,
+            run_name,
+            cfg["parent_db"],
+            schema,
+            table,
+            business_date,
+            test_name,
+            sql,
+            metrics,
+            passed,
+            None,
+            dur,
+            debug,
         )
 
     except Exception as e:
         insert_result(
-            session, run_name, cfg["parent_db"], schema, table, business_date,
-            test_name, sql, None, False, str(e)[:4000], None, debug
+            session,
+            run_name,
+            cfg["parent_db"],
+            schema,
+            table,
+            business_date,
+            test_name,
+            sql,
+            None,
+            False,
+            str(e)[:4000],
+            None,
+            debug,
         )
 
 
@@ -603,6 +668,7 @@ def test_structural_duplicates(
 # This test validates that all configured DATE columns contain no NULL values after load.
 # Each column is checked individually and violations are counted.
 # """
+
 
 def test_date_columns_not_null(session, cfg, run_name, bd, use_bd, debug):
     schema = cfg["schema"]
@@ -645,14 +711,16 @@ def test_date_columns_not_null(session, cfg, run_name, bd, use_bd, debug):
         "test_name": "DATE_COLS_NOT_NULL",
         "sql": ";".join(sql_list),
         "passed": total_viol == 0,
-        "metrics": {"details": results, "total_nulls": total_viol}
+        "metrics": {"details": results, "total_nulls": total_viol},
     }
+
 
 # """
 # 6 Test: TIMESTAMP Columns Not Null
 # This test checks that specified TIMESTAMP columns do not contain NULL values.
 # Each column is validated independently, and violations are aggregated.
 # """
+
 
 def test_timestamp_columns_not_null(session, cfg, run_name, bd, use_bd, debug):
     schema = cfg["schema"]
@@ -693,7 +761,7 @@ def test_timestamp_columns_not_null(session, cfg, run_name, bd, use_bd, debug):
         "test_name": "TIMESTAMP_COLS_NOT_NULL",
         "sql": ";".join(sql_list),
         "passed": total_viol == 0,
-        "metrics": {"details": results, "total_nulls": total_viol}
+        "metrics": {"details": results, "total_nulls": total_viol},
     }
 
 
@@ -702,6 +770,7 @@ def test_timestamp_columns_not_null(session, cfg, run_name, bd, use_bd, debug):
 # Ensures VARCHAR columns have no leading/trailing spaces.
 # Each column is validated independently.
 # """
+
 
 def test_trimmed_cols(session, cfg, run_name, bd, use_bd, debug):
     schema = cfg["schema"]
@@ -743,7 +812,7 @@ def test_trimmed_cols(session, cfg, run_name, bd, use_bd, debug):
         "test_name": "TRIMMED_COLS",
         "sql": ";".join(sql_list),
         "passed": total_viol == 0,
-        "metrics": {"details": results, "total_violations": total_viol}
+        "metrics": {"details": results, "total_violations": total_viol},
     }
 
 
@@ -752,6 +821,7 @@ def test_trimmed_cols(session, cfg, run_name, bd, use_bd, debug):
 # Ensures specified VARCHAR columns contain no newline (\n) or tab (\t) characters.
 # Each column is validated independently. Uses TO_VARCHAR to avoid collation issues.
 # """
+
 
 def test_cleaned_cols(session, cfg, run_name, bd, use_bd, debug):
     schema = cfg["schema"]
@@ -794,7 +864,7 @@ def test_cleaned_cols(session, cfg, run_name, bd, use_bd, debug):
         "test_name": "CLEANED_COLS",
         "sql": ";\n".join(sql_list),
         "passed": total_bad == 0,
-        "metrics": {"details": results, "total_bad": total_bad}
+        "metrics": {"details": results, "total_bad": total_bad},
     }
 
 
@@ -804,19 +874,20 @@ def test_cleaned_cols(session, cfg, run_name, bd, use_bd, debug):
 # Open record = end_date_column is NULL or equal to open_end_value.
 # """
 
-def test_scd2_single_open_record(session, cfg, run_name, bd, use_bd, debug):
-    schema   = cfg["schema"]
-    table    = cfg["name"]
-    parent_db = cfg["parent_db"]
-    fqn      = f"{parent_db}.{schema}.{table}"
 
-    scd_cfg  = cfg.get("scd") or {}
+def test_scd2_single_open_record(session, cfg, run_name, bd, use_bd, debug):
+    schema = cfg["schema"]
+    table = cfg["name"]
+    parent_db = cfg["parent_db"]
+    fqn = f"{parent_db}.{schema}.{table}"
+
+    scd_cfg = cfg.get("scd") or {}
     nat_keys = scd_cfg.get("natural_key_columns") or []
-    end_col  = scd_cfg.get("end_date_column")
+    end_col = scd_cfg.get("end_date_column")
     open_end = scd_cfg.get("open_end_value")
 
-    bd_col   = cfg.get("business_date_column")
-    extra    = cfg.get("extra_filter")
+    bd_col = cfg.get("business_date_column")
+    extra = cfg.get("extra_filter")
 
     if not nat_keys or not end_col:
         return {
@@ -824,7 +895,7 @@ def test_scd2_single_open_record(session, cfg, run_name, bd, use_bd, debug):
             "sql": None,
             "passed": False,
             "metrics": None,
-            "error": "Missing natural_key_columns or end_date_column in SCD config."
+            "error": "Missing natural_key_columns or end_date_column in SCD config.",
         }
 
     nat_list = ", ".join(nat_keys)
@@ -863,7 +934,7 @@ def test_scd2_single_open_record(session, cfg, run_name, bd, use_bd, debug):
         "test_name": "SCD2_SINGLE_OPEN_RECORD",
         "sql": sql,
         "passed": cnt == 0,
-        "metrics": {"BAD_KEY_CNT": cnt}
+        "metrics": {"BAD_KEY_CNT": cnt},
     }
 
 
@@ -871,6 +942,7 @@ def test_scd2_single_open_record(session, cfg, run_name, bd, use_bd, debug):
 #  10 Test: SCD2_BUSINESS_DATE_MAX
 # Ensures the maximum BUSINESS_DATE in the SCD2 table equals the current batch business date.
 # """
+
 
 def test_scd2_business_date_max(session, cfg, run_name, bd, use_bd, debug):
     schema = cfg["schema"]
@@ -887,7 +959,7 @@ def test_scd2_business_date_max(session, cfg, run_name, bd, use_bd, debug):
             "sql": None,
             "passed": False,
             "metrics": None,
-            "error": "Missing business_date_column in metadata."
+            "error": "Missing business_date_column in metadata.",
         }
 
     clauses = []
@@ -916,7 +988,7 @@ def test_scd2_business_date_max(session, cfg, run_name, bd, use_bd, debug):
         "test_name": "SCD2_BUSINESS_DATE_MAX",
         "sql": sql,
         "passed": passed,
-        "metrics": {"MAX_BD": max_bd, "EXPECTED": bd}
+        "metrics": {"MAX_BD": max_bd, "EXPECTED": bd},
     }
 
 
@@ -925,6 +997,7 @@ def test_scd2_business_date_max(session, cfg, run_name, bd, use_bd, debug):
 # Ensures all ETL batch columns (e.g., LOAD_DT, BATCH_ID) are not NULL.
 # Each column is tested independently.
 # """
+
 
 def test_scd2_batch_columns_not_null(session, cfg, run_name, bd, use_bd, debug):
     schema = cfg["schema"]
@@ -942,7 +1015,7 @@ def test_scd2_batch_columns_not_null(session, cfg, run_name, bd, use_bd, debug):
             "sql": None,
             "passed": False,
             "metrics": None,
-            "error": "batch_columns not defined in metadata."
+            "error": "batch_columns not defined in metadata.",
         }
 
     results = []
@@ -975,7 +1048,7 @@ def test_scd2_batch_columns_not_null(session, cfg, run_name, bd, use_bd, debug):
         "test_name": "SCD2_BATCH_COLUMNS_NOT_NULL",
         "sql": ";".join(sql_list),
         "passed": total_viol == 0,
-        "metrics": {"details": results, "total_nulls": total_viol}
+        "metrics": {"details": results, "total_nulls": total_viol},
     }
 
 
@@ -987,6 +1060,7 @@ def test_scd2_batch_columns_not_null(session, cfg, run_name, bd, use_bd, debug):
 # - current_flag_column = 0 (optional check if present)
 # """
 
+
 def test_scd2_logical_delete(session, cfg, run_name, bd, use_bd, debug):
     import datetime
 
@@ -996,13 +1070,13 @@ def test_scd2_logical_delete(session, cfg, run_name, bd, use_bd, debug):
     fqn = f"{parent_db}.{schema}.{table}"
 
     scd = cfg.get("scd") or {}
-    end_col  = scd.get("end_date_column")
+    end_col = scd.get("end_date_column")
     start_col = scd.get("start_date_column")
     curr_col = scd.get("current_flag_column")
     open_end = scd.get("open_end_value", "9999-12-31")
 
-    bd_col   = cfg.get("business_date_column")
-    extra    = cfg.get("extra_filter")
+    bd_col = cfg.get("business_date_column")
+    extra = cfg.get("extra_filter")
 
     if not end_col:
         return {
@@ -1010,7 +1084,7 @@ def test_scd2_logical_delete(session, cfg, run_name, bd, use_bd, debug):
             "sql": None,
             "passed": False,
             "metrics": None,
-            "error": "Missing end_date_column in SCD config."
+            "error": "Missing end_date_column in SCD config.",
         }
 
     if not use_bd:
@@ -1018,7 +1092,7 @@ def test_scd2_logical_delete(session, cfg, run_name, bd, use_bd, debug):
             "test_name": "SCD2_LOGICAL_DELETE",
             "sql": None,
             "passed": True,
-            "metrics": {"skipped": "BD filter disabled via 1900-01-01"}
+            "metrics": {"skipped": "BD filter disabled via 1900-01-01"},
         }
 
     # compute business_date - 1 day
@@ -1030,7 +1104,7 @@ def test_scd2_logical_delete(session, cfg, run_name, bd, use_bd, debug):
             "test_name": "SCD2_LOGICAL_DELETE",
             "sql": None,
             "passed": False,
-            "error": "Invalid business date format"
+            "error": "Invalid business date format",
         }
 
     clauses = [f"{end_col} = '{expected_end}'"]
@@ -1060,12 +1134,13 @@ def test_scd2_logical_delete(session, cfg, run_name, bd, use_bd, debug):
     return {
         "test_name": "SCD2_LOGICAL_DELETE",
         "sql": sql,
-        "passed": cnt >= 0,  # any count is valid — this test asserts correctness of formula, not volume
+        "passed": cnt
+        >= 0,  # any count is valid — this test asserts correctness of formula, not volume
         "metrics": {
             "LOGICAL_DEL_CNT": cnt,
             "EXPECTED_END_DT": expected_end,
-            "OPEN_END_VALUE": open_end
-        }
+            "OPEN_END_VALUE": open_end,
+        },
     }
 
 
@@ -1077,6 +1152,7 @@ def test_scd2_logical_delete(session, cfg, run_name, bd, use_bd, debug):
 # - current_flag_column = 0 (optional check if present)
 # """
 
+
 def test_scd2_logical_delete(session, cfg, run_name, bd, use_bd, debug):
     import datetime
 
@@ -1086,13 +1162,13 @@ def test_scd2_logical_delete(session, cfg, run_name, bd, use_bd, debug):
     fqn = f"{parent_db}.{schema}.{table}"
 
     scd = cfg.get("scd") or {}
-    end_col  = scd.get("end_date_column")
+    end_col = scd.get("end_date_column")
     start_col = scd.get("start_date_column")
     curr_col = scd.get("current_flag_column")
     open_end = scd.get("open_end_value", "9999-12-31")
 
-    bd_col   = cfg.get("business_date_column")
-    extra    = cfg.get("extra_filter")
+    bd_col = cfg.get("business_date_column")
+    extra = cfg.get("extra_filter")
 
     if not end_col:
         return {
@@ -1100,7 +1176,7 @@ def test_scd2_logical_delete(session, cfg, run_name, bd, use_bd, debug):
             "sql": None,
             "passed": False,
             "metrics": None,
-            "error": "Missing end_date_column in SCD config."
+            "error": "Missing end_date_column in SCD config.",
         }
 
     if not use_bd:
@@ -1108,7 +1184,7 @@ def test_scd2_logical_delete(session, cfg, run_name, bd, use_bd, debug):
             "test_name": "SCD2_LOGICAL_DELETE",
             "sql": None,
             "passed": True,
-            "metrics": {"skipped": "BD filter disabled via 1900-01-01"}
+            "metrics": {"skipped": "BD filter disabled via 1900-01-01"},
         }
 
     # compute business_date - 1 day
@@ -1120,7 +1196,7 @@ def test_scd2_logical_delete(session, cfg, run_name, bd, use_bd, debug):
             "test_name": "SCD2_LOGICAL_DELETE",
             "sql": None,
             "passed": False,
-            "error": "Invalid business date format"
+            "error": "Invalid business date format",
         }
 
     clauses = [f"{end_col} = '{expected_end}'"]
@@ -1150,14 +1226,14 @@ def test_scd2_logical_delete(session, cfg, run_name, bd, use_bd, debug):
     return {
         "test_name": "SCD2_LOGICAL_DELETE",
         "sql": sql,
-        "passed": cnt >= 0,  # any count is valid — this test asserts correctness of formula, not volume
+        "passed": cnt
+        >= 0,  # any count is valid — this test asserts correctness of formula, not volume
         "metrics": {
             "LOGICAL_DEL_CNT": cnt,
             "EXPECTED_END_DT": expected_end,
-            "OPEN_END_VALUE": open_end
-        }
+            "OPEN_END_VALUE": open_end,
+        },
     }
-
 
 
 # """
@@ -1171,6 +1247,7 @@ def test_scd2_logical_delete(session, cfg, run_name, bd, use_bd, debug):
 # - end_date_column indicates closed/deleted rows.
 # """
 
+
 def test_scd2_insert_update_delete_counts(session, cfg, run_name, bd, use_bd, debug):
     schema = cfg["schema"]
     table = cfg["name"]
@@ -1179,18 +1256,18 @@ def test_scd2_insert_update_delete_counts(session, cfg, run_name, bd, use_bd, de
 
     scd = cfg.get("scd") or {}
     start_col = scd.get("start_date_column")
-    end_col   = scd.get("end_date_column")
-    open_end  = scd.get("open_end_value", "9999-12-31")
+    end_col = scd.get("end_date_column")
+    open_end = scd.get("open_end_value", "9999-12-31")
 
     bd_col = cfg.get("business_date_column")
-    extra  = cfg.get("extra_filter")
+    extra = cfg.get("extra_filter")
 
     if not start_col or not end_col or not bd_col:
         return {
             "test_name": "SCD2_INSERT_UPDATE_DELETE_COUNTS",
             "sql": None,
             "passed": False,
-            "error": "Missing SCD2 start/end/business_date_column definitions."
+            "error": "Missing SCD2 start/end/business_date_column definitions.",
         }
 
     if not use_bd:
@@ -1198,7 +1275,7 @@ def test_scd2_insert_update_delete_counts(session, cfg, run_name, bd, use_bd, de
             "test_name": "SCD2_INSERT_UPDATE_DELETE_COUNTS",
             "sql": None,
             "passed": True,
-            "metrics": {"skipped": "BD filter disabled via 1900-01-01"}
+            "metrics": {"skipped": "BD filter disabled via 1900-01-01"},
         }
 
     clauses = [f"{bd_col} = '{bd}'"]
@@ -1207,7 +1284,9 @@ def test_scd2_insert_update_delete_counts(session, cfg, run_name, bd, use_bd, de
     where_clause = "WHERE " + " AND ".join(f"({c})" for c in clauses)
 
     # INSERT rows: start_col = business date
-    sql_insert = f"SELECT COUNT(*) AS INS_CNT FROM {fqn} {where_clause} AND {start_col} = '{bd}'"
+    sql_insert = (
+        f"SELECT COUNT(*) AS INS_CNT FROM {fqn} {where_clause} AND {start_col} = '{bd}'"
+    )
 
     # UPDATE rows: start_col = business date AND end_col != open_end -> changed record
     sql_update = f"SELECT COUNT(*) AS UPD_CNT FROM {fqn} {where_clause} AND {start_col} = '{bd}' AND {end_col} <> '{open_end}'"
@@ -1235,8 +1314,8 @@ def test_scd2_insert_update_delete_counts(session, cfg, run_name, bd, use_bd, de
         "metrics": {
             "INSERT_COUNT": cnt_ins,
             "UPDATE_COUNT": cnt_upd,
-            "DELETE_COUNT": cnt_del
-        }
+            "DELETE_COUNT": cnt_del,
+        },
     }
 
 
@@ -1246,11 +1325,12 @@ def test_scd2_insert_update_delete_counts(session, cfg, run_name, bd, use_bd, de
 # are not NULL for the given business date.
 # """
 
+
 def test_scd2_required_columns_not_null(session, cfg, run_name, bd, use_bd, debug):
-    schema    = cfg["schema"]
-    table     = cfg["name"]
+    schema = cfg["schema"]
+    table = cfg["name"]
     parent_db = cfg["parent_db"]
-    fqn       = f"{parent_db}.{schema}.{table}"
+    fqn = f"{parent_db}.{schema}.{table}"
 
     scd = cfg.get("scd") or {}
     required_cols = []
@@ -1264,7 +1344,7 @@ def test_scd2_required_columns_not_null(session, cfg, run_name, bd, use_bd, debu
         required_cols.append(scd["current_flag_column"])
 
     bd_col = cfg.get("business_date_column")
-    extra  = cfg.get("extra_filter")
+    extra = cfg.get("extra_filter")
 
     if not required_cols:
         return {
@@ -1272,7 +1352,7 @@ def test_scd2_required_columns_not_null(session, cfg, run_name, bd, use_bd, debu
             "sql": None,
             "passed": False,
             "metrics": None,
-            "error": "No SCD2 required columns found in metadata."
+            "error": "No SCD2 required columns found in metadata.",
         }
 
     results = []
@@ -1305,10 +1385,7 @@ def test_scd2_required_columns_not_null(session, cfg, run_name, bd, use_bd, debu
         "test_name": "SCD2_REQUIRED_COLUMNS_NOT_NULL",
         "sql": ";".join(sql_list),
         "passed": total_viol == 0,
-        "metrics": {
-            "details": results,
-            "total_nulls": total_viol
-        }
+        "metrics": {"details": results, "total_nulls": total_viol},
     }
 
 
@@ -1319,23 +1396,24 @@ def test_scd2_required_columns_not_null(session, cfg, run_name, bd, use_bd, debu
 # Example domain: ["A", "B", "C", None]
 # """
 
+
 def test_domain_value_checks(session, cfg, run_name, bd, use_bd, debug):
-    schema     = cfg["schema"]
-    table      = cfg["name"]
-    parent_db  = cfg["parent_db"]
-    fqn        = f"{parent_db}.{schema}.{table}"
+    schema = cfg["schema"]
+    table = cfg["name"]
+    parent_db = cfg["parent_db"]
+    fqn = f"{parent_db}.{schema}.{table}"
 
     domain_cfg = cfg.get("domain_checks") or []
 
     bd_col = cfg.get("business_date_column")
-    extra  = cfg.get("extra_filter")
+    extra = cfg.get("extra_filter")
 
     if not domain_cfg:
         return {
             "test_name": "DOMAIN_VALUE_CHECKS",
             "sql": None,
             "passed": False,
-            "error": "domain_checks not specified in metadata."
+            "error": "domain_checks not specified in metadata.",
         }
 
     sql_list = []
@@ -1351,7 +1429,7 @@ def test_domain_value_checks(session, cfg, run_name, bd, use_bd, debug):
                 "test_name": "DOMAIN_VALUE_CHECKS",
                 "sql": None,
                 "passed": False,
-                "error": "Invalid domain configuration entry."
+                "error": "Invalid domain configuration entry.",
             }
 
         allowed_sql_vals = []
@@ -1389,7 +1467,7 @@ def test_domain_value_checks(session, cfg, run_name, bd, use_bd, debug):
         "test_name": "DOMAIN_VALUE_CHECKS",
         "sql": ";".join(sql_list),
         "passed": total_viol == 0,
-        "metrics": {"details": results, "total_domain_violations": total_viol}
+        "metrics": {"details": results, "total_domain_violations": total_viol},
     }
 
 
@@ -1404,22 +1482,23 @@ def test_domain_value_checks(session, cfg, run_name, bd, use_bd, debug):
 # Each column is tested independently.
 # """
 
+
 def test_string_whitespace_and_control_chars(session, cfg, run_name, bd, use_bd, debug):
-    schema     = cfg["schema"]
-    table      = cfg["name"]
-    parent_db  = cfg["parent_db"]
-    fqn        = f"{parent_db}.{schema}.{table}"
+    schema = cfg["schema"]
+    table = cfg["name"]
+    parent_db = cfg["parent_db"]
+    fqn = f"{parent_db}.{schema}.{table}"
 
     cols = cfg.get("string_clean_checks") or []
     bd_col = cfg.get("business_date_column")
-    extra  = cfg.get("extra_filter")
+    extra = cfg.get("extra_filter")
 
     if not cols:
         return {
             "test_name": "STRING_WHITESPACE_AND_CONTROL_CHARS",
             "sql": None,
             "passed": False,
-            "error": "string_clean_checks not specified in metadata."
+            "error": "string_clean_checks not specified in metadata.",
         }
 
     sql_list = []
@@ -1451,7 +1530,9 @@ def test_string_whitespace_and_control_chars(session, cfg, run_name, bd, use_bd,
         sql_list.append(sql)
 
         if debug:
-            print(f"[DEBUG][STRING_WHITESPACE_AND_CONTROL_CHARS] SQL for column {col}:\n{sql}\n")
+            print(
+                f"[DEBUG][STRING_WHITESPACE_AND_CONTROL_CHARS] SQL for column {col}:\n{sql}\n"
+            )
 
         rows = session.sql(sql).collect()
         cnt = rows[0]["BAD_CNT"] if rows else 0
@@ -1462,7 +1543,7 @@ def test_string_whitespace_and_control_chars(session, cfg, run_name, bd, use_bd,
         "test_name": "STRING_WHITESPACE_AND_CONTROL_CHARS",
         "sql": ";".join(sql_list),
         "passed": total_viol == 0,
-        "metrics": {"details": results, "total_violations": total_viol}
+        "metrics": {"details": results, "total_violations": total_viol},
     }
 
 
@@ -1476,22 +1557,23 @@ def test_string_whitespace_and_control_chars(session, cfg, run_name, bd, use_bd,
 #   ]
 # """
 
+
 def test_numeric_range_validation(session, cfg, run_name, bd, use_bd, debug):
-    schema     = cfg["schema"]
-    table      = cfg["name"]
-    parent_db  = cfg["parent_db"]
-    fqn        = f"{parent_db}.{schema}.{table}"
+    schema = cfg["schema"]
+    table = cfg["name"]
+    parent_db = cfg["parent_db"]
+    fqn = f"{parent_db}.{schema}.{table}"
 
     checks = cfg.get("numeric_range_checks") or []
     bd_col = cfg.get("business_date_column")
-    extra  = cfg.get("extra_filter")
+    extra = cfg.get("extra_filter")
 
     if not checks:
         return {
             "test_name": "NUMERIC_RANGE_VALIDATION",
             "sql": None,
             "passed": False,
-            "error": "numeric_range_checks not specified in metadata."
+            "error": "numeric_range_checks not specified in metadata.",
         }
 
     sql_list = []
@@ -1509,15 +1591,15 @@ def test_numeric_range_validation(session, cfg, run_name, bd, use_bd, debug):
 
     for item in checks:
         col = item.get("column")
-        mn  = item.get("min")
-        mx  = item.get("max")
+        mn = item.get("min")
+        mx = item.get("max")
 
         if col is None or mn is None or mx is None:
             return {
                 "test_name": "NUMERIC_RANGE_VALIDATION",
                 "sql": None,
                 "passed": False,
-                "error": f"Invalid entry in numeric_range_checks: {item}"
+                "error": f"Invalid entry in numeric_range_checks: {item}",
             }
 
         where = build_where(col, mn, mx)
@@ -1536,7 +1618,7 @@ def test_numeric_range_validation(session, cfg, run_name, bd, use_bd, debug):
         "test_name": "NUMERIC_RANGE_VALIDATION",
         "sql": ";".join(sql_list),
         "passed": total_viol == 0,
-        "metrics": {"details": results, "total_out_of_range": total_viol}
+        "metrics": {"details": results, "total_out_of_range": total_viol},
     }
 
 
@@ -1547,22 +1629,23 @@ def test_numeric_range_validation(session, cfg, run_name, bd, use_bd, debug):
 #   business_keys: ["ORDER_ID", "LINE_NO", "CUSTOMER_ID"]
 # """
 
+
 def test_duplicate_business_keys(session, cfg, run_name, bd, use_bd, debug):
-    schema     = cfg["schema"]
-    table      = cfg["name"]
-    parent_db  = cfg["parent_db"]
-    fqn        = f"{parent_db}.{schema}.{table}"
+    schema = cfg["schema"]
+    table = cfg["name"]
+    parent_db = cfg["parent_db"]
+    fqn = f"{parent_db}.{schema}.{table}"
 
     bk_cols = cfg.get("business_keys") or []
-    bd_col  = cfg.get("business_date_column")
-    extra   = cfg.get("extra_filter")
+    bd_col = cfg.get("business_date_column")
+    extra = cfg.get("extra_filter")
 
     if not bk_cols:
         return {
             "test_name": "DUPLICATE_BUSINESS_KEYS",
             "sql": None,
             "passed": False,
-            "error": "business_keys not defined in metadata."
+            "error": "business_keys not defined in metadata.",
         }
 
     bk_expr = ", ".join(bk_cols)
@@ -1598,7 +1681,7 @@ def test_duplicate_business_keys(session, cfg, run_name, bd, use_bd, debug):
         "test_name": "DUPLICATE_BUSINESS_KEYS",
         "sql": sql,
         "passed": dup_cnt == 0,
-        "metrics": {"DUP_CNT": dup_cnt}
+        "metrics": {"DUP_CNT": dup_cnt},
     }
 
 
@@ -1611,27 +1694,28 @@ def test_duplicate_business_keys(session, cfg, run_name, bd, use_bd, debug):
 # This detects identical snapshots that shouldn't exist in a Type-2 history table.
 # """
 
+
 def test_duplicate_scd2_keys(session, cfg, run_name, bd, use_bd, debug):
-    schema     = cfg["schema"]
-    table      = cfg["name"]
-    parent_db  = cfg["parent_db"]
-    fqn        = f"{parent_db}.{schema}.{table}"
+    schema = cfg["schema"]
+    table = cfg["name"]
+    parent_db = cfg["parent_db"]
+    fqn = f"{parent_db}.{schema}.{table}"
 
     scd = cfg.get("scd") or {}
     nat_keys = scd.get("natural_key_columns") or []
     start_col = scd.get("start_date_column")
-    end_col   = scd.get("end_date_column")
-    curr_col  = scd.get("current_flag_column")
+    end_col = scd.get("end_date_column")
+    curr_col = scd.get("current_flag_column")
 
-    bd_col  = cfg.get("business_date_column")
-    extra   = cfg.get("extra_filter")
+    bd_col = cfg.get("business_date_column")
+    extra = cfg.get("extra_filter")
 
     if not nat_keys or not start_col or not end_col:
         return {
             "test_name": "DUPLICATE_SCD2_KEYS",
             "sql": None,
             "passed": False,
-            "error": "Missing required SCD2 columns or natural keys."
+            "error": "Missing required SCD2 columns or natural keys.",
         }
 
     # Build duplicate key expression
@@ -1673,10 +1757,7 @@ def test_duplicate_scd2_keys(session, cfg, run_name, bd, use_bd, debug):
         "test_name": "DUPLICATE_SCD2_KEYS",
         "sql": sql,
         "passed": dup_cnt == 0,
-        "metrics": {
-            "DUP_CNT": dup_cnt,
-            "KEY_COLUMNS": key_cols
-        }
+        "metrics": {"DUP_CNT": dup_cnt, "KEY_COLUMNS": key_cols},
     }
 
 
@@ -1686,22 +1767,23 @@ def test_duplicate_scd2_keys(session, cfg, run_name, bd, use_bd, debug):
 # These columns are defined in metadata under: etl_batch_columns
 # """
 
+
 def test_etl_batch_columns_not_null(session, cfg, run_name, bd, use_bd, debug):
-    schema     = cfg["schema"]
-    table      = cfg["name"]
-    parent_db  = cfg["parent_db"]
-    fqn        = f"{parent_db}.{schema}.{table}"
+    schema = cfg["schema"]
+    table = cfg["name"]
+    parent_db = cfg["parent_db"]
+    fqn = f"{parent_db}.{schema}.{table}"
 
     cols = cfg.get("etl_batch_columns") or []
     bd_col = cfg.get("business_date_column")
-    extra  = cfg.get("extra_filter")
+    extra = cfg.get("extra_filter")
 
     if not cols:
         return {
             "test_name": "ETL_BATCH_COLUMNS_NOT_NULL",
             "sql": None,
             "passed": False,
-            "error": "etl_batch_columns not defined in metadata."
+            "error": "etl_batch_columns not defined in metadata.",
         }
 
     sql_list = []
@@ -1734,10 +1816,7 @@ def test_etl_batch_columns_not_null(session, cfg, run_name, bd, use_bd, debug):
         "test_name": "ETL_BATCH_COLUMNS_NOT_NULL",
         "sql": ";".join(sql_list),
         "passed": total_viol == 0,
-        "metrics": {
-            "details": results,
-            "total_nulls": total_viol
-        }
+        "metrics": {"details": results, "total_nulls": total_viol},
     }
 
 
@@ -1755,22 +1834,23 @@ def test_etl_batch_columns_not_null(session, cfg, run_name, bd, use_bd, debug):
 #   ]
 # """
 
+
 def test_foreign_key_orphans(session, cfg, run_name, bd, use_bd, debug):
-    schema     = cfg["schema"]
-    table      = cfg["name"]
-    parent_db  = cfg["parent_db"]
-    child_fqn  = f"{parent_db}.{schema}.{table}"
+    schema = cfg["schema"]
+    table = cfg["name"]
+    parent_db = cfg["parent_db"]
+    child_fqn = f"{parent_db}.{schema}.{table}"
 
     fk_list = cfg.get("fk_relations") or []
-    bd_col  = cfg.get("business_date_column")
-    extra   = cfg.get("extra_filter")
+    bd_col = cfg.get("business_date_column")
+    extra = cfg.get("extra_filter")
 
     if not fk_list:
         return {
             "test_name": "FOREIGN_KEY_ORPHANS",
             "sql": None,
             "passed": False,
-            "error": "fk_relations missing in metadata."
+            "error": "fk_relations missing in metadata.",
         }
 
     sql_list = []
@@ -1778,17 +1858,17 @@ def test_foreign_key_orphans(session, cfg, run_name, bd, use_bd, debug):
     results = []
 
     for fk in fk_list:
-        child_col     = fk.get("child_column")
-        p_schema      = fk.get("parent_schema")
-        p_table       = fk.get("parent_table")
-        parent_key    = fk.get("parent_key_column")
+        child_col = fk.get("child_column")
+        p_schema = fk.get("parent_schema")
+        p_table = fk.get("parent_table")
+        parent_key = fk.get("parent_key_column")
 
         if not (child_col and p_schema and p_table and parent_key):
             return {
                 "test_name": "FOREIGN_KEY_ORPHANS",
                 "sql": None,
                 "passed": False,
-                "error": f"Invalid FK definition: {fk}"
+                "error": f"Invalid FK definition: {fk}",
             }
 
         parent_fqn = f"{parent_db}.{p_schema}.{p_table}"
@@ -1821,19 +1901,13 @@ def test_foreign_key_orphans(session, cfg, run_name, bd, use_bd, debug):
         rows = session.sql(sql).collect()
         cnt = rows[0]["ORPHAN_CNT"] if rows else 0
         total_orphans += cnt
-        results.append({
-            "fk": fk,
-            "ORPHAN_CNT": cnt
-        })
+        results.append({"fk": fk, "ORPHAN_CNT": cnt})
 
     return {
         "test_name": "FOREIGN_KEY_ORPHANS",
         "sql": ";".join(sql_list),
         "passed": total_orphans == 0,
-        "metrics": {
-            "details": results,
-            "total_orphans": total_orphans
-        }
+        "metrics": {"details": results, "total_orphans": total_orphans},
     }
 
 
@@ -1853,22 +1927,23 @@ def test_foreign_key_orphans(session, cfg, run_name, bd, use_bd, debug):
 #   ]
 # """
 
+
 def test_orphan_checks(session, cfg, run_name, bd, use_bd, debug):
-    schema     = cfg["schema"]
-    table      = cfg["name"]
-    parent_db  = cfg["parent_db"]
-    child_fqn  = f"{parent_db}.{schema}.{table}"
+    schema = cfg["schema"]
+    table = cfg["name"]
+    parent_db = cfg["parent_db"]
+    child_fqn = f"{parent_db}.{schema}.{table}"
 
     checks = cfg.get("orphan_checks") or []
     bd_col = cfg.get("business_date_column")
-    extra  = cfg.get("extra_filter")
+    extra = cfg.get("extra_filter")
 
     if not checks:
         return {
             "test_name": "ORPHAN_CHECKS",
             "sql": None,
             "passed": False,
-            "error": "orphan_checks missing in metadata."
+            "error": "orphan_checks missing in metadata.",
         }
 
     sql_list = []
@@ -1876,9 +1951,9 @@ def test_orphan_checks(session, cfg, run_name, bd, use_bd, debug):
     results = []
 
     for chk in checks:
-        child_col  = chk.get("child_column")
-        p_schema   = chk.get("parent_schema")
-        p_table    = chk.get("parent_table")
+        child_col = chk.get("child_column")
+        p_schema = chk.get("parent_schema")
+        p_table = chk.get("parent_table")
         parent_key = chk.get("parent_key_column")
 
         if not (child_col and p_schema and p_table and parent_key):
@@ -1886,7 +1961,7 @@ def test_orphan_checks(session, cfg, run_name, bd, use_bd, debug):
                 "test_name": "ORPHAN_CHECKS",
                 "sql": None,
                 "passed": False,
-                "error": f"Invalid orphan check definition: {chk}"
+                "error": f"Invalid orphan check definition: {chk}",
             }
 
         parent_fqn = f"{parent_db}.{p_schema}.{p_table}"
@@ -1920,19 +1995,13 @@ def test_orphan_checks(session, cfg, run_name, bd, use_bd, debug):
         cnt = rows[0]["ORPHAN_CNT"] if rows else 0
         total_orphans += cnt
 
-        results.append({
-            "check": chk,
-            "ORPHAN_CNT": cnt
-        })
+        results.append({"check": chk, "ORPHAN_CNT": cnt})
 
     return {
         "test_name": "ORPHAN_CHECKS",
         "sql": ";".join(sql_list),
         "passed": total_orphans == 0,
-        "metrics": {
-            "details": results,
-            "total_orphans": total_orphans
-        }
+        "metrics": {"details": results, "total_orphans": total_orphans},
     }
 
 
@@ -1942,22 +2011,23 @@ def test_orphan_checks(session, cfg, run_name, bd, use_bd, debug):
 # Each column is checked independently.
 # """
 
+
 def test_pk_not_null(session, cfg, run_name, bd, use_bd, debug):
-    schema     = cfg["schema"]
-    table      = cfg["name"]
-    parent_db  = cfg["parent_db"]
-    fqn        = f"{parent_db}.{schema}.{table}"
+    schema = cfg["schema"]
+    table = cfg["name"]
+    parent_db = cfg["parent_db"]
+    fqn = f"{parent_db}.{schema}.{table}"
 
     pk_cols = cfg.get("pk_columns") or []
-    bd_col  = cfg.get("business_date_column")
-    extra   = cfg.get("extra_filter")
+    bd_col = cfg.get("business_date_column")
+    extra = cfg.get("extra_filter")
 
     if not pk_cols:
         return {
             "test_name": "PK_NOT_NULL",
             "sql": None,
             "passed": False,
-            "error": "pk_columns not defined in metadata."
+            "error": "pk_columns not defined in metadata.",
         }
 
     sql_list = []
@@ -1990,12 +2060,8 @@ def test_pk_not_null(session, cfg, run_name, bd, use_bd, debug):
         "test_name": "PK_NOT_NULL",
         "sql": ";".join(sql_list),
         "passed": total_nulls == 0,
-        "metrics": {
-            "details": results,
-            "total_nulls": total_nulls
-        }
+        "metrics": {"details": results, "total_nulls": total_nulls},
     }
-
 
 
 # ============================================================
@@ -2003,41 +2069,35 @@ def test_pk_not_null(session, cfg, run_name, bd, use_bd, debug):
 # ============================================================
 
 TEST_REGISTRY = {
-
     # 1–8 STRUCTURAL TESTS
-    "BUSINESS_DATE_MATCH":                    test_business_date_match,
-    "NON_ZERO_COUNT_FOR_BUSINESS_DATE":       test_non_zero_count,
+    "BUSINESS_DATE_MATCH": test_business_date_match,
+    "NON_ZERO_COUNT_FOR_BUSINESS_DATE": test_non_zero_count,
     # "PK_NULL_CHECK":                          test_pk_null_check,
-    "STRUCTURAL_DUPLICATES":                  test_structural_duplicates,
-    "DATE_COLS_NOT_NULL":                     test_date_columns_not_null,
-    "TIMESTAMP_COLS_NOT_NULL":                test_timestamp_columns_not_null,
-    "TRIMMED_COLS":                           test_trimmed_cols,
-    "CLEANED_COLS":                           test_cleaned_cols,
-
+    "STRUCTURAL_DUPLICATES": test_structural_duplicates,
+    "DATE_COLS_NOT_NULL": test_date_columns_not_null,
+    "TIMESTAMP_COLS_NOT_NULL": test_timestamp_columns_not_null,
+    "TRIMMED_COLS": test_trimmed_cols,
+    "CLEANED_COLS": test_cleaned_cols,
     # 9–14 SCD2 TESTS
-    "SCD2_SINGLE_OPEN_RECORD":                test_scd2_single_open_record,
-    "SCD2_BUSINESS_DATE_MAX":                 test_scd2_business_date_max,
-    "SCD2_BATCH_COLUMNS_NOT_NULL":            test_scd2_batch_columns_not_null,
-    "SCD2_LOGICAL_DELETE":                    test_scd2_logical_delete,
-    "SCD2_INSERT_UPDATE_DELETE_COUNTS":       test_scd2_insert_update_delete_counts,
-    "SCD2_REQUIRED_COLUMNS_NOT_NULL":         test_scd2_required_columns_not_null,
-
+    "SCD2_SINGLE_OPEN_RECORD": test_scd2_single_open_record,
+    "SCD2_BUSINESS_DATE_MAX": test_scd2_business_date_max,
+    "SCD2_BATCH_COLUMNS_NOT_NULL": test_scd2_batch_columns_not_null,
+    "SCD2_LOGICAL_DELETE": test_scd2_logical_delete,
+    "SCD2_INSERT_UPDATE_DELETE_COUNTS": test_scd2_insert_update_delete_counts,
+    "SCD2_REQUIRED_COLUMNS_NOT_NULL": test_scd2_required_columns_not_null,
     # 15–17 BUSINESS / DATA QUALITY TESTS
-    "DOMAIN_VALUE_CHECKS":                    test_domain_value_checks,
-    "STRING_WHITESPACE_AND_CONTROL_CHARS":    test_string_whitespace_and_control_chars,
-    "NUMERIC_RANGE_VALIDATION":               test_numeric_range_validation,
-
+    "DOMAIN_VALUE_CHECKS": test_domain_value_checks,
+    "STRING_WHITESPACE_AND_CONTROL_CHARS": test_string_whitespace_and_control_chars,
+    "NUMERIC_RANGE_VALIDATION": test_numeric_range_validation,
     # 18–21 DUPLICATE + RELATIONAL TESTS
-    "DUPLICATE_BUSINESS_KEYS":                test_duplicate_business_keys,
-    "DUPLICATE_SCD2_KEYS":                    test_duplicate_scd2_keys,
-    "ETL_BATCH_COLUMNS_NOT_NULL":             test_etl_batch_columns_not_null,
-
+    "DUPLICATE_BUSINESS_KEYS": test_duplicate_business_keys,
+    "DUPLICATE_SCD2_KEYS": test_duplicate_scd2_keys,
+    "ETL_BATCH_COLUMNS_NOT_NULL": test_etl_batch_columns_not_null,
     # 22–23 ORPHANS + PK NOT NULL
-    "FOREIGN_KEY_ORPHANS":                    test_foreign_key_orphans,
-    "ORPHAN_CHECKS":                          test_orphan_checks,
-    "PK_NOT_NULL":                            test_pk_not_null,
+    "FOREIGN_KEY_ORPHANS": test_foreign_key_orphans,
+    "ORPHAN_CHECKS": test_orphan_checks,
+    "PK_NOT_NULL": test_pk_not_null,
 }
-
 
 
 ######## EXECUTION CALLER ########
@@ -2045,6 +2105,7 @@ TEST_REGISTRY = {
 # ======================================================================
 # RESULT TABLE CREATION
 # ======================================================================
+
 
 def ensure_results_table(session):
     session.sql("""
@@ -2070,10 +2131,12 @@ def ensure_results_table(session):
 # UTILITIES
 # ======================================================================
 
+
 def escape_sql_literal(s):
     if s is None:
         return "NULL"
     return "'" + s.replace("'", "''") + "'"
+
 
 def should_apply_business_date(bd_value):
     return bd_value not in (None, "1900-01-01")
@@ -2083,15 +2146,27 @@ def should_apply_business_date(bd_value):
 # INSERT RESULT
 # ======================================================================
 
+
 def insert_result(
-    session, run_name, parent_db, schema, table, business_date_value,
-    test_name, resolved_sql, metrics, passed, error, duration_ms, debug
+    session,
+    run_name,
+    parent_db,
+    schema,
+    table,
+    business_date_value,
+    test_name,
+    resolved_sql,
+    metrics,
+    passed,
+    error,
+    duration_ms,
+    debug,
 ):
     run_lit = escape_sql_literal(run_name)
-    db_lit  = escape_sql_literal(parent_db)
+    db_lit = escape_sql_literal(parent_db)
     sch_lit = escape_sql_literal(schema)
     tbl_lit = escape_sql_literal(table)
-    bd_lit  = escape_sql_literal(business_date_value)
+    bd_lit = escape_sql_literal(business_date_value)
 
     sql_lit = escape_sql_literal(resolved_sql) if resolved_sql else "NULL"
     err_lit = escape_sql_literal(error) if error else "NULL"
@@ -2101,14 +2176,17 @@ def insert_result(
         metrics_lit = "NULL"
     else:
         import json
+
         js = json.dumps(metrics).replace("'", "''")
         metrics_lit = f"'{js}'"
 
     pass_lit = ("'PASS'" if passed else "'FAIL'") if passed is not None else "NULL"
-    dur_lit  = "NULL" if duration_ms is None else str(duration_ms)
+    dur_lit = "NULL" if duration_ms is None else str(duration_ms)
 
     if debug:
-        print(f"[DEBUG][{test_name}] Inserting test result: passed={passed}, error={error}")
+        print(
+            f"[DEBUG][{test_name}] Inserting test result: passed={passed}, error={error}"
+        )
 
     session.sql(f"""
         INSERT INTO QA_SHAKEDOWN_RESULTS
@@ -2126,6 +2204,7 @@ def insert_result(
 # ======================================================================
 # EXECUTOR ENGINE
 # ======================================================================
+
 
 def run_shakedown(session, meta, business_date_value):
     """
@@ -2149,13 +2228,13 @@ def run_shakedown(session, meta, business_date_value):
 
     ensure_results_table(session)
 
-    run_name   = meta.get("run_name", "shakedown_run")
-    parent_db  = meta.get("parent_db")
-    tbl_cfg    = meta["table"]
-    schema     = tbl_cfg["schema"]
-    table      = tbl_cfg["name"]
+    run_name = meta.get("run_name", "shakedown_run")
+    parent_db = meta.get("parent_db")
+    tbl_cfg = meta["table"]
+    schema = tbl_cfg["schema"]
+    table = tbl_cfg["name"]
     date_filter = meta.get("date_filter")
-    debug      = str(meta.get("debug_mode", "NO")).upper() == "YES"
+    debug = str(meta.get("debug_mode", "NO")).upper() == "YES"
 
     requested_tests = meta.get("tests_to_run", list(TEST_REGISTRY.keys()))
     active_tests = [t for t in requested_tests if t in TEST_REGISTRY]
@@ -2180,7 +2259,7 @@ def run_shakedown(session, meta, business_date_value):
                 run_name=run_name,
                 bd=business_date_value,
                 use_bd=use_bd,
-                debug=debug
+                debug=debug,
             )
 
             insert_result(
@@ -2196,7 +2275,7 @@ def run_shakedown(session, meta, business_date_value):
                 result.get("passed"),
                 result.get("error"),
                 result.get("duration_ms"),
-                debug
+                debug,
             )
 
         except Exception as ex:
@@ -2213,7 +2292,7 @@ def run_shakedown(session, meta, business_date_value):
                 False,
                 str(ex),
                 None,
-                debug
+                debug,
             )
 
     # return summary
@@ -2238,6 +2317,7 @@ def run_shakedown(session, meta, business_date_value):
 # SIMPLE CALL WRAPPER
 # ======================================================================
 
+
 def run_table_shakedown(session, db_name, table_fqn, business_date_value):
     """
     Helper wrapper to run:
@@ -2258,7 +2338,7 @@ def run_table_shakedown(session, db_name, table_fqn, business_date_value):
         "table": cfg_base["table"],
         "tests_to_run": cfg_base.get("tests_to_run", []),
         "debug_mode": cfg_base.get("debug_mode", "NO"),
-        "date_filter": cfg_base.get("date_filter")
+        "date_filter": cfg_base.get("date_filter"),
     }
 
     meta["table"]["schema"] = schema

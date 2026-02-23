@@ -6,6 +6,7 @@
 import numpy as np
 from data_prep import features, targets, features_test, targets_test
 
+
 # ------------------------------------------------
 # Sigmoid Activation Function
 # ------------------------------------------------
@@ -80,7 +81,7 @@ last_loss = None
 # - Prevents sigmoid saturation
 # - Encourages stable training
 # ------------------------------------------------
-weights = np.random.normal(scale=1 / n_features**.5, size=n_features)
+weights = np.random.normal(scale=1 / n_features**0.5, size=n_features)
 
 
 # ------------------------------------------------
@@ -172,7 +173,6 @@ for e in range(epochs):
     # weight update (since we're using MSE).
     # ------------------------------------------------
     weights += learnrate * del_w / n_records
-
 
     # ------------------------------------------------
     # Monitor Training Loss

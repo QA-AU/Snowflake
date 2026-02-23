@@ -71,8 +71,14 @@
 # =============================================================================
 
 from snowflake.snowpark.functions import (
-    col, split, size, replace, lit, current_timestamp,
-    substring, array_construct
+    col,
+    split,
+    size,
+    replace,
+    lit,
+    current_timestamp,
+    substring,
+    array_construct,
 )
 from snowflake.snowpark.types import StringType
 
@@ -82,11 +88,11 @@ def ingest_file_snowpark(
     stage_path: str,
     header_list: list,
     target_table: str,
-    file_type: str,                 # "DELIMITED" | "FIXED"
-    fixed_widths: list = None,       # required if FIXED
+    file_type: str,  # "DELIMITED" | "FIXED"
+    fixed_widths: list = None,  # required if FIXED
     row_delimiter: str = "\n",
     legacy_delimiter: str = "¿",
-    safe_delimiter: str = "\x1F"
+    safe_delimiter: str = "\x1f",
 ):
 
     reject_table = f"{target_table}_REJECT"
@@ -98,11 +104,7 @@ def ingest_file_snowpark(
 
     try:
         # 1. Read raw file as single-column rows
-        raw_df = (
-            session.read
-                .option("RECORD_DELIMITER", row_delimiter)
-                .csv(stage_path)
-        )
+        raw_df = session.read.option("RECORD_DELIMITER", row_delimiter).csv(stage_path)
 
         total_rows = raw_df.count()
 
@@ -110,10 +112,9 @@ def ingest_file_snowpark(
         if file_type == "DELIMITED":
             parsed_df = raw_df.select(
                 split(
-                    replace(col("$1"), legacy_delimiter, safe_delimiter),
-                    safe_delimiter
+                    replace(col("$1"), legacy_delimiter, safe_delimiter), safe_delimiter
                 ).alias("cols"),
-                col("$1").alias("raw_row")
+                col("$1").alias("raw_row"),
             )
 
         elif file_type == "FIXED":
@@ -127,8 +128,7 @@ def ingest_file_snowpark(
                 pos += width
 
             parsed_df = raw_df.select(
-                array_construct(*col_exprs).alias("cols"),
-                col("$1").alias("raw_row")
+                array_construct(*col_exprs).alias("cols"), col("$1").alias("raw_row")
             )
 
         else:
@@ -155,7 +155,7 @@ def ingest_file_snowpark(
             size(col("cols")).cast(StringType()).alias("actual_column_count"),
             lit(str(expected_cols)).alias("expected_column_count"),
             lit("COLUMN_COUNT_MISMATCH").alias("reject_reason"),
-            current_timestamp().alias("reject_ts")
+            current_timestamp().alias("reject_ts"),
         )
 
         reject_out.write.mode("overwrite").save_as_table(reject_table)
@@ -169,7 +169,7 @@ def ingest_file_snowpark(
             "total_rows": total_rows,
             "valid_rows": valid_df.count(),
             "reject_rows": reject_df.count(),
-            "status": "SUCCESS" if reject_df.count() == 0 else "PARTIAL_SUCCESS"
+            "status": "SUCCESS" if reject_df.count() == 0 else "PARTIAL_SUCCESS",
         }
 
         print("====================================")
@@ -187,5 +187,5 @@ def ingest_file_snowpark(
             "stage_path": stage_path,
             "target_table": target_table,
             "status": "ERROR",
-            "error_message": str(e)
+            "error_message": str(e),
         }, f"Ingestion failed: {e}"

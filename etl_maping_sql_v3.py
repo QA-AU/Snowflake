@@ -1,7 +1,7 @@
 etl_maping_sql_v2.py
 
 # etl_maping_sql_v2.py
-# GENERATE SQL from mapping info and execute them one by one 
+# GENERATE SQL from mapping info and execute them one by one
 
 from snowflake.snowpark import Session
 import re
@@ -9,24 +9,20 @@ import re
 # ===================== Configuration =========================================
 TABLE_META = {
     "debug_mode": "YES",  # "YES" prints debug info
-
     "source_system": "ERP",
     "source_db_name": "SALES_DB",
     "source_schema_name": "PUBLIC",
     "source_pk_columns": "ORDER_ID, LINE_NO",
     "source_join_clause": "LEFT JOIN LKP.CUST c ON c.id = o.cust_id",
     "source_filter_clause": "o.status = 'OPEN'",
-
     # CHANGE: date_filter now uses a logical variable (no alias)
     # Previously: "o.order_date between ('2024-01-01' and '2024-12-31')"
     # Now:       "order_date between ('2024-01-01' and '2024-12-31')"
     "date_filter": "order_date between ('2024-01-01' and '2024-12-31')",
-
     # NEW: the token name to be replaced in SQL (resolved differently for source/target)
     "date_filter_token": "order_date",
-
     # Target-side global filter (optional)
-    "target_filter_clause": "status = 'OPEN'"
+    "target_filter_clause": "status = 'OPEN'",
 }
 
 COLUMNS = [
@@ -41,7 +37,7 @@ COLUMNS = [
         "target_data_type": "STRING",
         "target_schema_name": "CORE",
         "target_table_name": "ORDERS",
-        "target_column_name": "cust_tier"
+        "target_column_name": "cust_tier",
     },
     {
         "source_table_name": "ORDERS",
@@ -54,7 +50,7 @@ COLUMNS = [
         "target_data_type": "DATE",
         "target_schema_name": "CORE",
         "target_table_name": "ORDERS",
-        "target_column_name": "order_date"
+        "target_column_name": "order_date",
     },
     {
         "source_table_name": "ORDERS",
@@ -67,37 +63,47 @@ COLUMNS = [
         "target_data_type": "NUMBER(18,2)",
         "target_schema_name": "CORE",
         "target_table_name": "ORDERS",
-        "target_column_name": "amount"
-    }
+        "target_column_name": "amount",
+    },
 ]
 # ============================================================================
 
+
 # ----------------------------- Helpers --------------------------------------
-def _is_null(x): 
+def _is_null(x):
     return x is None or (isinstance(x, str) and x.strip().lower() in ("null", ""))
+
 
 def _path(db, schema, table):
     parts = []
-    if not _is_null(db): 
+    if not _is_null(db):
         parts.append(db.strip())
-    if not _is_null(schema): 
+    if not _is_null(schema):
         parts.append(schema.strip())
     parts.append(table.strip())
     return ".".join(parts)
 
+
 def _q_lit(v):
-    if _is_null(v): 
+    if _is_null(v):
         return "NULL"
-    if isinstance(v, (int, float)): 
+    if isinstance(v, (int, float)):
         return str(v)
     return "'" + str(v).replace("'", "''") + "'"
 
+
 def _split_csv(s):
-    return [p.strip() for p in s.split(",") if p and p.strip()] if s and not _is_null(s) else []
+    return (
+        [p.strip() for p in s.split(",") if p and p.strip()]
+        if s and not _is_null(s)
+        else []
+    )
+
 
 def _apply_alias_token(expr, alias, table):
     actual = (alias if alias and not _is_null(alias) else table) + "."
-    return re.sub(r'(?i)\balias\.', actual, expr)
+    return re.sub(r"(?i)\balias\.", actual, expr)
+
 
 def _combine_filters(*parts):
     """Return a single SQL WHERE string combined with ANDs, with parentheses around each non-empty part."""
@@ -106,6 +112,7 @@ def _combine_filters(*parts):
         return ""
     # Parenthesize each part to avoid precedence surprises when the caller includes AND/OR
     return " AND ".join([f"({t})" for t in toks])
+
 
 # NEW: helper to resolve a logical date token into an actual column expression
 def _resolve_date_filter(meta, alias=None, for_target=False):
@@ -132,38 +139,62 @@ def _resolve_date_filter(meta, alias=None, for_target=False):
     pattern = r"\b" + re.escape(token) + r"\b"
     return re.sub(pattern, replacement, raw)
 
+
 _ALIAS = {
-    "STRING":"STRING","VARCHAR":"STRING","CHAR":"STRING","CHARACTER":"STRING","NCHAR":"STRING","NVARCHAR":"STRING","TEXT":"STRING",
-    "NUMBER":"NUMERIC","DECIMAL":"NUMERIC","NUMERIC":"NUMERIC","INT":"NUMERIC","INTEGER":"NUMERIC","BIGINT":"NUMERIC","SMALLINT":"NUMERIC",
-    "TINYINT":"NUMERIC","FLOAT":"NUMERIC","DOUBLE":"NUMERIC","REAL":"NUMERIC",
-    "BOOLEAN":"BOOL","BOOL":"BOOL","DATE":"DATE","TIME":"TIME",
-    "TIMESTAMP":"TIMESTAMP_NTZ","TIMESTAMP_LTZ":"TIMESTAMP_LTZ","TIMESTAMP_TZ":"TIMESTAMP_TZ",
+    "STRING": "STRING",
+    "VARCHAR": "STRING",
+    "CHAR": "STRING",
+    "CHARACTER": "STRING",
+    "NCHAR": "STRING",
+    "NVARCHAR": "STRING",
+    "TEXT": "STRING",
+    "NUMBER": "NUMERIC",
+    "DECIMAL": "NUMERIC",
+    "NUMERIC": "NUMERIC",
+    "INT": "NUMERIC",
+    "INTEGER": "NUMERIC",
+    "BIGINT": "NUMERIC",
+    "SMALLINT": "NUMERIC",
+    "TINYINT": "NUMERIC",
+    "FLOAT": "NUMERIC",
+    "DOUBLE": "NUMERIC",
+    "REAL": "NUMERIC",
+    "BOOLEAN": "BOOL",
+    "BOOL": "BOOL",
+    "DATE": "DATE",
+    "TIME": "TIME",
+    "TIMESTAMP": "TIMESTAMP_NTZ",
+    "TIMESTAMP_LTZ": "TIMESTAMP_LTZ",
+    "TIMESTAMP_TZ": "TIMESTAMP_TZ",
 }
 _TYPE_RE = re.compile(r"^\s*([A-Z_]+)\s*(?:\(\s*(\d+)\s*(?:,\s*(\d+)\s*)?\))?\s*$")
 
+
 def _canonical_type(t):
-    if _is_null(t): 
+    if _is_null(t):
         return None
     raw = str(t).strip().upper()
     m = _TYPE_RE.match(raw)
-    if not m: 
+    if not m:
         return None
     base, p, s = m.group(1), m.group(2), m.group(3)
     fam = _ALIAS.get(base, base)
-    if p and s: 
+    if p and s:
         return f"{fam}({int(p)},{int(s)})"
-    if p: 
+    if p:
         return f"{fam}({int(p)})"
     return fam
 
+
 def _needs_cast(src_type, tgt_type):
     tgt = _canonical_type(tgt_type)
-    if tgt is None: 
+    if tgt is None:
         return False
     src = _canonical_type(src_type)
     return src != tgt
 
-def _debug_on(meta): 
+
+def _debug_on(meta):
     return str(meta.get("debug_mode", "")).strip().upper() == "YES"
 
 
@@ -179,22 +210,26 @@ def build_source_sql(meta, col):
     tbl, alias = col["source_table_name"], col.get("source_alias")
     c = col["source_column_name"]
     override, lookup = col.get("source_column_override"), col.get("source_lookup_sql")
-    default, sdt, tdt = col.get("source_default_value"), col.get("source_data_type"), col.get("target_data_type")
+    default, sdt, tdt = (
+        col.get("source_default_value"),
+        col.get("source_data_type"),
+        col.get("target_data_type"),
+    )
     tgt_schema, tgt_table = col["target_schema_name"], col["target_table_name"]
     out_name = col.get("target_column_name") or c
 
     fqn = _path(db, schema, tbl) + (f" {alias}" if alias else "")
-    if debug: 
+    if debug:
         print(f"[DEBUG] fqn -> {fqn}")
 
     # Expression precedence
     if not _is_null(override):
         expr = _apply_alias_token(override.strip(), alias, tbl)
-        if debug: 
+        if debug:
             print(f"[DEBUG] override_expr -> {expr}")
     elif not _is_null(lookup):
         expr = _apply_alias_token(lookup.strip(), alias, tbl)
-        if debug: 
+        if debug:
             print(f"[DEBUG] lookup_sql -> {expr}")
     elif alias:
         expr = f"{alias}.{c}"
@@ -203,18 +238,18 @@ def build_source_sql(meta, col):
 
     if not _is_null(default):
         expr = f"COALESCE({expr}, {_q_lit(default)})"
-        if debug: 
+        if debug:
             print(f"[DEBUG] default_value -> {default}")
 
     if _needs_cast(sdt, tdt):
         expr = f"CAST({expr} AS {tdt.strip()})"
-        if debug: 
+        if debug:
             print(f"[DEBUG] cast_applied -> AS {tdt.strip()}")
 
     sel = [f"{alias}.{pk} AS {pk}" if alias else f"{pk} AS {pk}" for pk in pks]
     sel.append(f"{expr} AS {out_name}")
     select_clause = ", ".join(sel)
-    if debug: 
+    if debug:
         print(f"[DEBUG] select_clause -> {select_clause}")
 
     # CHANGE: resolve variable-style date_filter for SOURCE using alias (e.g. o.order_date)
@@ -222,18 +257,18 @@ def build_source_sql(meta, col):
 
     # WHERE: combine source filter + resolved date_filter
     where_combined = _combine_filters(src_flt, date_flt)
-    if debug and where_combined: 
+    if debug and where_combined:
         print(f"[DEBUG] where_clause -> {where_combined}")
 
     sql = []
-    if sys: 
+    if sys:
         sql.append(f"-- Source System: {sys}")
     sql.append(f"-- Target: {tgt_schema}.{tgt_table}")
     sql.append(f"SELECT {select_clause}")
     sql.append(f"FROM {fqn}")
-    if join: 
+    if join:
         sql.append(join)
-    if where_combined: 
+    if where_combined:
         sql.append("WHERE " + where_combined)
     return "\n".join(sql) + ";"
 
@@ -248,11 +283,13 @@ def build_target_sql(meta, col):
     out_name = col.get("target_column_name") or col["source_column_name"]
 
     fqn = _path(db, tgt_schema, tgt_table)
-    if debug: 
+    if debug:
         print(f"[DEBUG] target_fqn -> {fqn}")
 
-    select_clause = ", ".join([f"{pk} AS {pk}" for pk in pks] + [f"{out_name} AS {out_name}"])
-    if debug: 
+    select_clause = ", ".join(
+        [f"{pk} AS {pk}" for pk in pks] + [f"{out_name} AS {out_name}"]
+    )
+    if debug:
         print(f"[DEBUG] select_clause (target) -> {select_clause}")
 
     # CHANGE: resolve variable-style date_filter for TARGET (typically plain column name)
@@ -260,11 +297,11 @@ def build_target_sql(meta, col):
 
     # WHERE: combine target filter + resolved date_filter
     where_combined = _combine_filters(tgt_flt, date_flt)
-    if debug and where_combined: 
+    if debug and where_combined:
         print(f"[DEBUG] where_clause (target) -> {where_combined}")
 
     sql = [f"SELECT {select_clause}", f"FROM {fqn}"]
-    if where_combined: 
+    if where_combined:
         sql.append("WHERE " + where_combined)
     return "\n".join(sql) + ";"
 
@@ -296,6 +333,7 @@ def main(session: Session):
     # If your worksheet expects a DataFrame return, return DF instead of string:
     return session.sql("SELECT * FROM QA_TEMP_MAPPING_SQL ORDER BY COLUMN_NAME")
 
+
 # --------------------------- Run interactively ------------------------------
 # Return a DataFrame so the worksheet renders it (avoids 'handler did not return a DataFrame' error)
 main(session)
@@ -304,6 +342,7 @@ main(session)
 # -------------- EXECUTOR / VALIDATOR FUNCTIONS --------
 
 from snowflake.snowpark import Session
+
 
 # ============================================================
 # Utility: ensure required columns exist
@@ -381,7 +420,7 @@ def prepare_validation_sqls(session, table_fqn: str = "STG.QA_TEMP_MAPPING_SQL")
 
         # Escape quotes for UPDATE
         count_sql_esc = count_sql.replace("'", "''")
-        diff_sql_esc  = diff_sql.replace("'", "''")
+        diff_sql_esc = diff_sql.replace("'", "''")
 
         session.sql(f"""
             UPDATE {table_fqn}
@@ -415,9 +454,9 @@ def run_validation_sqls(session, table_fqn: str = "STG.QA_TEMP_MAPPING_SQL"):
     """).collect()
 
     for r in rows:
-        row_id    = r["ROW_ID"]
+        row_id = r["ROW_ID"]
         count_sql = r["COUNT_SQL"]
-        diff_sql  = r["DIFF_SQL"]
+        diff_sql = r["DIFF_SQL"]
 
         if not count_sql or not diff_sql:
             continue
@@ -434,7 +473,7 @@ def run_validation_sqls(session, table_fqn: str = "STG.QA_TEMP_MAPPING_SQL"):
             tmp = {"SRC": 0, "TGT": 0}
             for cr in cnt_rows:
                 side = str(cr["SIDE"]).upper()
-                val  = int(cr["CNT"])
+                val = int(cr["CNT"])
                 if side in tmp:
                     tmp[side] = val
             counts = tmp
@@ -451,12 +490,16 @@ def run_validation_sqls(session, table_fqn: str = "STG.QA_TEMP_MAPPING_SQL"):
         # 3️⃣ Build update expressions
         counts_json_expr = (
             f"""PARSE_JSON('{{"SRC": {counts["SRC"]}, "TGT": {counts["TGT"]}}}')"""
-            if (counts["SRC"] is not None and counts["TGT"] is not None and count_err is None)
+            if (
+                counts["SRC"] is not None
+                and counts["TGT"] is not None
+                and count_err is None
+            )
             else "NULL"
         )
-        diff_expr  = "NULL" if diff_val is None else str(diff_val)
-        cerr_expr  = "NULL" if count_err is None else f"'{count_err}'"
-        derr_expr  = "NULL" if diff_err  is None else f"'{diff_err}'"
+        diff_expr = "NULL" if diff_val is None else str(diff_val)
+        cerr_expr = "NULL" if count_err is None else f"'{count_err}'"
+        derr_expr = "NULL" if diff_err is None else f"'{diff_err}'"
 
         # 4️⃣ Update row safely
         session.sql(f"""

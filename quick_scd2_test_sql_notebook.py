@@ -12,34 +12,36 @@ quick_scd2_test_sql_notebook.py
 #   - TARGET has SCD2 columns: FROM_DATE, END_DATE; optionally IS_CURRENT.
 #
 # Inputs to edit:
-SRC_SCHEMA      = "SRC_STG"
-SRC_TABLE       = "CUSTOMER_STG"
-TGT_SCHEMA      = "TGT_DW"
-TGT_TABLE       = "DIM_CUSTOMER"
+SRC_SCHEMA = "SRC_STG"
+SRC_TABLE = "CUSTOMER_STG"
+TGT_SCHEMA = "TGT_DW"
+TGT_TABLE = "DIM_CUSTOMER"
 
 # Natural key columns (list of strings) — same names in SRC and TGT
-PK_COLS         = ["CUSTOMER_ID"]
+PK_COLS = ["CUSTOMER_ID"]
 
 # Open-row criterion: use IS_CURRENT='Y' if present, else END_DATE = HIGH_DATE
-USE_IS_CURRENT  = True           # if False → use END_DATE == HIGH_DATE
-HIGH_DATE       = "9999-12-31"   # high date literal used in your SCD2
+USE_IS_CURRENT = True  # if False → use END_DATE == HIGH_DATE
+HIGH_DATE = "9999-12-31"  # high date literal used in your SCD2
 
 # Limit validation to a sample of PKs from SOURCE (set to None to validate full tables)
-SAMPLE_PK_COUNT = 1000           # e.g., 1000 PKs; or set to None for full scan
+SAMPLE_PK_COUNT = 1000  # e.g., 1000 PKs; or set to None for full scan
 
 # Optional extra filter on the source to choose the window (e.g., last_load_date)
-SRC_FILTER      = None           # e.g., "load_date >= '2025-08-01'"
+SRC_FILTER = None  # e.g., "load_date >= '2025-08-01'"
 
 # ============== Do not edit below ==============
 import pandas as pd
 from snowflake.snowpark import Session
 
-assert 'session' in globals(), "Snowflake `session` not found. Ensure the Notebook created a Snowpark session."
+assert (
+    "session" in globals()
+), "Snowflake `session` not found. Ensure the Notebook created a Snowpark session."
 
 SRC_FQN = f'"{SRC_SCHEMA}"."{SRC_TABLE}"'
 TGT_FQN = f'"{TGT_SCHEMA}"."{TGT_TABLE}"'
-PK_CSV  = ", ".join([f'"{c}"' for c in PK_COLS])
-PK_EQ   = " AND ".join([f's."{c}" = t."{c}"' for c in PK_COLS])
+PK_CSV = ", ".join([f'"{c}"' for c in PK_COLS])
+PK_EQ = " AND ".join([f's."{c}" = t."{c}"' for c in PK_COLS])
 
 print("=== SCD2 VALIDATOR: setup keys ===")
 # 0) Choose key set: sample or full
@@ -49,10 +51,12 @@ if SRC_FILTER:
     src_sel += f" WHERE {SRC_FILTER}"
 if SAMPLE_PK_COUNT:
     # DISTINCT keys then LIMIT
-    src_keys_sql = f'CREATE TEMP VIEW SRC_KEYS AS SELECT DISTINCT {PK_CSV} FROM ({src_sel}) LIMIT {int(SAMPLE_PK_COUNT)}'
+    src_keys_sql = f"CREATE TEMP VIEW SRC_KEYS AS SELECT DISTINCT {PK_CSV} FROM ({src_sel}) LIMIT {int(SAMPLE_PK_COUNT)}"
     scope_note = f"SAMPLED: {SAMPLE_PK_COUNT} PKs from source"
 else:
-    src_keys_sql = f'CREATE TEMP VIEW SRC_KEYS AS SELECT DISTINCT {PK_CSV} FROM ({src_sel})'
+    src_keys_sql = (
+        f"CREATE TEMP VIEW SRC_KEYS AS SELECT DISTINCT {PK_CSV} FROM ({src_sel})"
+    )
     scope_note = "FULL: all PKs from source (may be heavy)"
 session.sql(src_keys_sql).collect()
 
@@ -99,7 +103,7 @@ FROM (
 
 # 3) Check: overlapping ranges per PK (pairwise intersect)
 # Build PK equality once
-PK_EQ_A_B = " AND ".join([f'a.\"{c}\"=b.\"{c}\"' for c in PK_COLS])
+PK_EQ_A_B = " AND ".join([f'a."{c}"=b."{c}"' for c in PK_COLS])
 overlap_sql = f"""
 SELECT COUNT(*) AS VIOLATIONS
 FROM {TGT_FQN} a
@@ -154,30 +158,36 @@ WHERE END_DATE <> DATE '{HIGH_DATE}'
   AND next_from <> DATEADD(DAY,1,END_DATE)
 """
 
+
 # Run checks
 def one_val(sql):
-    return int(session.sql(sql).to_pandas().iloc[0,0])
+    return int(session.sql(sql).to_pandas().iloc[0, 0])
+
 
 results = []
 checks = [
     ("1) Inverted ranges (FROM_DATE > END_DATE)", inv_sql, True),
-    ("2) Exactly one current row per PK",         curr_sql, True),
-    ("3) Overlapping date ranges per PK",         overlap_sql, True),
-    ("4) Source coverage missing in current",     cov_sql, True),
-    ("5) Orphan closed rows (no next contiguous)",orphan_sql, True),
-    ("6) Gaps in date chains (info)",             gaps_sql, False),
+    ("2) Exactly one current row per PK", curr_sql, True),
+    ("3) Overlapping date ranges per PK", overlap_sql, True),
+    ("4) Source coverage missing in current", cov_sql, True),
+    ("5) Orphan closed rows (no next contiguous)", orphan_sql, True),
+    ("6) Gaps in date chains (info)", gaps_sql, False),
 ]
 
 for name, sql, strict in checks:
     v = one_val(sql)
-    status = ("PASS" if v==0 else ("FAIL" if strict else "WARN"))
+    status = "PASS" if v == 0 else ("FAIL" if strict else "WARN")
     results.append({"check_name": name, "violations": v, "status": status})
 
 df = pd.DataFrame(results)
 display(df)  # In Snowflake Notebook: renders a nice table
 
 # Overall PASS/FAIL (strict on checks 1–5; 6 is informational)
-overall_ok = all((r["violations"]==0) for r in results if r["check_name"].startswith(tuple(str(i)+")" for i in range(1,6))))
+overall_ok = all(
+    (r["violations"] == 0)
+    for r in results
+    if r["check_name"].startswith(tuple(str(i) + ")" for i in range(1, 6)))
+)
 print("\n=== OVERALL ===")
 print(f"Scope: {scope_note}")
 print(f"Source: {SRC_FQN}  |  Target: {TGT_FQN}")

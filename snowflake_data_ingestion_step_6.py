@@ -11,8 +11,10 @@ from snowflake.snowpark import Session
 import pandas as pd
 
 # Uses VALIDATION_SCHEMA and SIM_TABLE from Step 5
-assert 'session' in globals(), "ERROR: Snowflake session not found."
-assert 'VALIDATION_SCHEMA' in globals() and 'SIM_TABLE' in globals(), "ERROR: SIM config not found. Run Step 5."
+assert "session" in globals(), "ERROR: Snowflake session not found."
+assert (
+    "VALIDATION_SCHEMA" in globals() and "SIM_TABLE" in globals()
+), "ERROR: SIM config not found. Run Step 5."
 
 print("Part A — Checking column alignment ...")
 sim_cols = session.sql(f"""
@@ -36,8 +38,12 @@ if not common_cols:
 cols_csv = ", ".join([f'"{c}"' for c in common_cols])
 
 print("Part B — Row-count compare ...")
-sim_cnt = session.sql(f'SELECT COUNT(*) C FROM {VALIDATION_SCHEMA}."{SIM_TABLE}"').to_pandas()["C"][0]
-tgt_cnt = session.sql(f'SELECT COUNT(*) C FROM "{TLAYER}"."{TGTTABLE}"').to_pandas()["C"][0]
+sim_cnt = session.sql(
+    f'SELECT COUNT(*) C FROM {VALIDATION_SCHEMA}."{SIM_TABLE}"'
+).to_pandas()["C"][0]
+tgt_cnt = session.sql(f'SELECT COUNT(*) C FROM "{TLAYER}"."{TGTTABLE}"').to_pandas()[
+    "C"
+][0]
 print(f"  SIM rows: {sim_cnt} | TARGET rows: {tgt_cnt}")
 
 print("Part C — PK-level symmetric diff ...")
@@ -53,10 +59,14 @@ if not pk_tgts:
     raise SystemExit("ERROR: No PK columns in META for diffing.")
 
 pk_csv = ", ".join([f'"{k}"' for k in pk_tgts])
-session.sql("CREATE OR REPLACE TEMP VIEW SIM_KEYS AS " +
-            f"SELECT {pk_csv} FROM {VALIDATION_SCHEMA}.\"{SIM_TABLE}\" GROUP BY {pk_csv}").collect()
-session.sql("CREATE OR REPLACE TEMP VIEW TGT_KEYS AS " +
-            f"SELECT {pk_csv} FROM \"{TLAYER}\".\"{TGTTABLE}\" GROUP BY {pk_csv}").collect()
+session.sql(
+    "CREATE OR REPLACE TEMP VIEW SIM_KEYS AS "
+    + f'SELECT {pk_csv} FROM {VALIDATION_SCHEMA}."{SIM_TABLE}" GROUP BY {pk_csv}'
+).collect()
+session.sql(
+    "CREATE OR REPLACE TEMP VIEW TGT_KEYS AS "
+    + f'SELECT {pk_csv} FROM "{TLAYER}"."{TGTTABLE}" GROUP BY {pk_csv}'
+).collect()
 
 # Missing in target / extra in target
 missing_in_tgt = session.sql(f"""
@@ -75,8 +85,14 @@ print(f"  Extra in TARGET   (PKs): {len(extra_in_tgt)}")
 
 print("Part D — Value mismatches on intersecting PKs (sample) ...")
 # Join SIM vs TARGET on PK; compare common columns
-join_on = " AND ".join([f"s.\"{k}\" = t.\"{k}\"" for k in pk_tgts])
-diff_or = " OR ".join([f"NVL(s.\"{c}\", '§NULL§') <> NVL(t.\"{c}\", '§NULL§')" for c in common_cols if c not in pk_tgts])
+join_on = " AND ".join([f's."{k}" = t."{k}"' for k in pk_tgts])
+diff_or = " OR ".join(
+    [
+        f"NVL(s.\"{c}\", '§NULL§') <> NVL(t.\"{c}\", '§NULL§')"
+        for c in common_cols
+        if c not in pk_tgts
+    ]
+)
 if not diff_or:
     print("  No comparable non-PK columns; skipping value diff.")
 else:
@@ -96,8 +112,10 @@ else:
 print("\nSTEP 6 SUMMARY")
 print("--------------------------------------------------")
 print(f"Row count     : SIM={sim_cnt} | TARGET={tgt_cnt}")
-print(f"PK symm diff  : missing_in_target={len(missing_in_tgt)} | extra_in_target={len(extra_in_tgt)}")
-if 'diff_cnt' in locals():
+print(
+    f"PK symm diff  : missing_in_target={len(missing_in_tgt)} | extra_in_target={len(extra_in_tgt)}"
+)
+if "diff_cnt" in locals():
     print(f"Value mismatch: {diff_cnt}")
 print("--------------------------------------------------")
 print("Successfully completed Step 6 (comparison).")

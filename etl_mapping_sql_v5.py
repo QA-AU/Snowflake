@@ -12,30 +12,25 @@ import re
 # ===================== Configuration =========================================
 TABLE_META = {
     "debug_mode": "YES",  # "YES" prints debug info
-
     "source_system": "ERP",
     "source_db_name": "SALES_DB",
     "source_schema_name": "PUBLIC",
     "source_pk_columns": "ORDER_ID, LINE_NO",
     "source_join_clause": "LEFT JOIN LKP.CUST c ON c.id = o.cust_id",
     "source_filter_clause": "o.status = 'OPEN'",
-
     # CHANGE: date_filter now uses a logical variable (no alias).
     # Previously: "o.order_date between ('2024-01-01' and '2024-12-31')"
     # Now:       "order_date between ('2024-01-01' and '2024-12-31')"
     "date_filter": "order_date between ('2024-01-01' and '2024-12-31')",
-
     # Token name to be replaced in SQL (resolved differently for source/target).
     "date_filter_token": "order_date",
-
     # Target-side global filter (optional)
     "target_filter_clause": "status = 'OPEN'",
-
     # NEW: QA / mapping table location is metadata-driven
     # If qa_db_name is None, we fall back to source_db_name (or current DB).
-    "qa_db_name": None,                  # e.g. "SESAME" or None to use current / source_db_name
-    "qa_schema_name": "STG",             # default schema for QA table
-    "qa_table_name": "QA_TEMP_MAPPING_SQL"  # table name for generated mapping SQL
+    "qa_db_name": None,  # e.g. "SESAME" or None to use current / source_db_name
+    "qa_schema_name": "STG",  # default schema for QA table
+    "qa_table_name": "QA_TEMP_MAPPING_SQL",  # table name for generated mapping SQL
 }
 
 COLUMNS = [
@@ -50,7 +45,7 @@ COLUMNS = [
         "target_data_type": "STRING",
         "target_schema_name": "CORE",
         "target_table_name": "ORDERS",
-        "target_column_name": "cust_tier"
+        "target_column_name": "cust_tier",
     },
     {
         "source_table_name": "ORDERS",
@@ -63,7 +58,7 @@ COLUMNS = [
         "target_data_type": "DATE",
         "target_schema_name": "CORE",
         "target_table_name": "ORDERS",
-        "target_column_name": "order_date"
+        "target_column_name": "order_date",
     },
     {
         "source_table_name": "ORDERS",
@@ -76,10 +71,11 @@ COLUMNS = [
         "target_data_type": "NUMBER(18,2)",
         "target_schema_name": "CORE",
         "target_table_name": "ORDERS",
-        "target_column_name": "amount"
-    }
+        "target_column_name": "amount",
+    },
 ]
 # ============================================================================
+
 
 # ----------------------------- Helpers --------------------------------------
 def _is_null(x):
@@ -105,12 +101,16 @@ def _q_lit(v):
 
 
 def _split_csv(s):
-    return [p.strip() for p in s.split(",") if p and p.strip()] if s and not _is_null(s) else []
+    return (
+        [p.strip() for p in s.split(",") if p and p.strip()]
+        if s and not _is_null(s)
+        else []
+    )
 
 
 def _apply_alias_token(expr, alias, table):
     actual = (alias if alias and not _is_null(alias) else table) + "."
-    return re.sub(r'(?i)\balias\.', actual, expr)
+    return re.sub(r"(?i)\balias\.", actual, expr)
 
 
 def _combine_filters(*parts):
@@ -150,13 +150,31 @@ def _resolve_date_filter(meta, alias=None, for_target=False):
 
 
 _ALIAS = {
-    "STRING": "STRING", "VARCHAR": "STRING", "CHAR": "STRING", "CHARACTER": "STRING",
-    "NCHAR": "STRING", "NVARCHAR": "STRING", "TEXT": "STRING",
-    "NUMBER": "NUMERIC", "DECIMAL": "NUMERIC", "NUMERIC": "NUMERIC",
-    "INT": "NUMERIC", "INTEGER": "NUMERIC", "BIGINT": "NUMERIC", "SMALLINT": "NUMERIC",
-    "TINYINT": "NUMERIC", "FLOAT": "NUMERIC", "DOUBLE": "NUMERIC", "REAL": "NUMERIC",
-    "BOOLEAN": "BOOL", "BOOL": "BOOL", "DATE": "DATE", "TIME": "TIME",
-    "TIMESTAMP": "TIMESTAMP_NTZ", "TIMESTAMP_LTZ": "TIMESTAMP_LTZ", "TIMESTAMP_TZ": "TIMESTAMP_TZ",
+    "STRING": "STRING",
+    "VARCHAR": "STRING",
+    "CHAR": "STRING",
+    "CHARACTER": "STRING",
+    "NCHAR": "STRING",
+    "NVARCHAR": "STRING",
+    "TEXT": "STRING",
+    "NUMBER": "NUMERIC",
+    "DECIMAL": "NUMERIC",
+    "NUMERIC": "NUMERIC",
+    "INT": "NUMERIC",
+    "INTEGER": "NUMERIC",
+    "BIGINT": "NUMERIC",
+    "SMALLINT": "NUMERIC",
+    "TINYINT": "NUMERIC",
+    "FLOAT": "NUMERIC",
+    "DOUBLE": "NUMERIC",
+    "REAL": "NUMERIC",
+    "BOOLEAN": "BOOL",
+    "BOOL": "BOOL",
+    "DATE": "DATE",
+    "TIME": "TIME",
+    "TIMESTAMP": "TIMESTAMP_NTZ",
+    "TIMESTAMP_LTZ": "TIMESTAMP_LTZ",
+    "TIMESTAMP_TZ": "TIMESTAMP_TZ",
 }
 _TYPE_RE = re.compile(r"^\s*([A-Z_]+)\s*(?:\(\s*(\d+)\s*(?:,\s*(\d+)\s*)?\))?\s*$")
 
@@ -222,7 +240,11 @@ def build_source_sql(meta, col):
     tbl, alias = col["source_table_name"], col.get("source_alias")
     c = col["source_column_name"]
     override, lookup = col.get("source_column_override"), col.get("source_lookup_sql")
-    default, sdt, tdt = col.get("source_default_value"), col.get("source_data_type"), col.get("target_data_type")
+    default, sdt, tdt = (
+        col.get("source_default_value"),
+        col.get("source_data_type"),
+        col.get("target_data_type"),
+    )
     tgt_schema, tgt_table = col["target_schema_name"], col["target_table_name"]
     out_name = col.get("target_column_name") or c
 
@@ -294,7 +316,9 @@ def build_target_sql(meta, col):
     if debug:
         print(f"[DEBUG] target_fqn -> {fqn}")
 
-    select_clause = ", ".join([f"{pk} AS {pk}" for pk in pks] + [f"{out_name} AS {out_name}"])
+    select_clause = ", ".join(
+        [f"{pk} AS {pk}" for pk in pks] + [f"{out_name} AS {out_name}"]
+    )
     if debug:
         print(f"[DEBUG] select_clause (target) -> {select_clause}")
 
@@ -346,6 +370,7 @@ def main_generate(session: Session):
 
 
 # -------------- EXECUTOR / VALIDATOR FUNCTIONS --------
+
 
 # ============================================================
 # Utility: ensure required columns exist
@@ -503,7 +528,11 @@ def run_validation_sqls(session, table_fqn: str = ""):
         # 3️⃣ Build update expressions
         counts_json_expr = (
             f"""PARSE_JSON('{{"SRC": {counts["SRC"]}, "TGT": {counts["TGT"]}}}')"""
-            if (counts["SRC"] is not None and counts["TGT"] is not None and count_err is None)
+            if (
+                counts["SRC"] is not None
+                and counts["TGT"] is not None
+                and count_err is None
+            )
             else "NULL"
         )
         diff_expr = "NULL" if diff_val is None else str(diff_val)
@@ -576,7 +605,7 @@ def main(session: Session):
 # ============================================================
 # main_generate(session)   # Only generate mapping SQL into QA table
 # main_validate(session)   # Only validate already-generated mappings
-main(session)              # Orchestrate: generate + validate, return validation summary
+main(session)  # Orchestrate: generate + validate, return validation summary
 
 # HOW TO RUN MANUALLY (if needed):
 # qa_table = _qa_table_fqn()

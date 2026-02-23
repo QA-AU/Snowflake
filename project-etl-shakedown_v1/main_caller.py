@@ -11,11 +11,7 @@ from auto_runner import auto_runner
 # =========================================================
 # Single Table Caller
 # =========================================================
-def run_single_table(
-        session,
-        table_fqn: str,
-        business_date: str,
-        debug: bool = False):
+def run_single_table(session, table_fqn: str, business_date: str, debug: bool = False):
     """
     Run the full shakedown for a single specified table.
 
@@ -36,10 +32,7 @@ def run_single_table(
         print(f"[MAIN] Business date: {business_date}")
 
     return run_shakedown(
-        session=session,
-        table_fqn=table_fqn,
-        business_date=business_date,
-        debug=debug
+        session=session, table_fqn=table_fqn, business_date=business_date, debug=debug
     )
 
 
@@ -47,10 +40,11 @@ def run_single_table(
 # Auto-Runner Caller
 # =========================================================
 def run_all_tables(
-        session,
-        business_date: str,
-        tables_filter: Optional[List[str]] = None,
-        debug: bool = False) -> Dict[str, "DataFrame"]:
+    session,
+    business_date: str,
+    tables_filter: Optional[List[str]] = None,
+    debug: bool = False,
+) -> Dict[str, "DataFrame"]:
     """
     Auto-discover all metadata JSON files in @temp_config_stage
     and run shakedown tests for each table.
@@ -60,7 +54,7 @@ def run_all_tables(
     session : Snowpark Session
     business_date : "YYYY-MM-DD"
     tables_filter : Optional[List[str]]
-        If provided, only metadata files with names containing 
+        If provided, only metadata files with names containing
         any of the filter strings will run.
         Example: ["ORDER", "CUSTOMER"]
     debug : bool
@@ -82,7 +76,7 @@ def run_all_tables(
         session=session,
         business_date=business_date,
         tables_filter=tables_filter,
-        debug=debug
+        debug=debug,
     )
 
 
@@ -90,12 +84,13 @@ def run_all_tables(
 # Convenience Main Caller
 # =========================================================
 def main_caller(
-        session,
-        mode: str,
-        business_date: str,
-        table_fqn: Optional[str] = None,
-        tables_filter: Optional[List[str]] = None,
-        debug: bool = False):
+    session,
+    mode: str,
+    business_date: str,
+    table_fqn: Optional[str] = None,
+    tables_filter: Optional[List[str]] = None,
+    debug: bool = False,
+):
     """
     Unified calling interface for the entire framework.
 
@@ -132,7 +127,7 @@ def main_caller(
             session=session,
             table_fqn=table_fqn,
             business_date=business_date,
-            debug=debug
+            debug=debug,
         )
 
     else:  # mode == "auto"
@@ -140,5 +135,5 @@ def main_caller(
             session=session,
             business_date=business_date,
             tables_filter=tables_filter,
-            debug=debug
+            debug=debug,
         )

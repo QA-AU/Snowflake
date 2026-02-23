@@ -13,7 +13,7 @@ import pandas as pd
 from snowflake.snowpark import Session
 
 # --- CONFIG ---
-file_path = "meta_config.xlsx"   # adjust to your uploaded Excel
+file_path = "meta_config.xlsx"  # adjust to your uploaded Excel
 
 # 0.1 Read Excel
 print("Validating: reading Excel file ...")
@@ -23,10 +23,18 @@ df_meta.columns = [c.strip().lower() for c in df_meta.columns]
 # 0.2 Required headers
 print("Validating: required headers ...")
 required = [
-    "tlayer","slayer","srctablename","tgtable",
-    "srccolumnname","tgtcolumnname",
-    "primarykey","ignore_row","use_scd2",
-    "is_deleted","is_filter","history"
+    "tlayer",
+    "slayer",
+    "srctablename",
+    "tgtable",
+    "srccolumnname",
+    "tgtcolumnname",
+    "primarykey",
+    "ignore_row",
+    "use_scd2",
+    "is_deleted",
+    "is_filter",
+    "history",
 ]
 missing = [c for c in required if c not in df_meta.columns]
 if missing:
@@ -39,14 +47,23 @@ if df_meta.empty:
 
 # 0.4 Flag values
 print("Validating: flag values ...")
-flag_cols = ["primarykey","ignore_row","use_scd2","is_deleted","is_filter","history"]
+flag_cols = [
+    "primarykey",
+    "ignore_row",
+    "use_scd2",
+    "is_deleted",
+    "is_filter",
+    "history",
+]
 for col in flag_cols:
-    bad = df_meta[~df_meta[col].astype(str).str.upper().isin(["Y","N"])]
+    bad = df_meta[~df_meta[col].astype(str).str.upper().isin(["Y", "N"])]
     if not bad.empty:
-        raise SystemExit(f"ERROR: Invalid flag values in column '{col}': {bad[col].unique().tolist()}")
+        raise SystemExit(
+            f"ERROR: Invalid flag values in column '{col}': {bad[col].unique().tolist()}"
+        )
 
 # Group by table
-grouped = df_meta.groupby(["slayer","srctablename","tlayer","tgtable"])
+grouped = df_meta.groupby(["slayer", "srctablename", "tlayer", "tgtable"])
 
 # 1.1 Primary key
 print("Validating: primary key per table ...")
@@ -66,9 +83,11 @@ print("Validating: SCD2 prerequisites ...")
 for keys, g in grouped:
     if g["history"].str.upper().iloc[0] == "N":  # SCD2 mode
         from_present = (g["srccolumnname"].str.lower() == "from_date").any()
-        end_present  = (g["srccolumnname"].str.lower() == "end_date").any()
+        end_present = (g["srccolumnname"].str.lower() == "end_date").any()
         if not (from_present and end_present):
-            raise SystemExit(f"ERROR: {keys} missing from_date/end_date mapping for SCD2 mode")
+            raise SystemExit(
+                f"ERROR: {keys} missing from_date/end_date mapping for SCD2 mode"
+            )
         if (g["is_deleted"].str.upper() == "Y").sum() > 1:
             raise SystemExit(f"ERROR: {keys} has multiple is_deleted=Y columns")
 
@@ -112,7 +131,7 @@ for keys, g in grouped:
     pks = g.loc[g["primarykey"].str.upper() == "Y", "srccolumnname"].tolist()
     mode = "HISTORY" if g["history"].str.upper().iloc[0] == "Y" else "SCD2"
     from_present = (g["srccolumnname"].str.lower() == "from_date").any()
-    end_present  = (g["srccolumnname"].str.lower() == "end_date").any()
+    end_present = (g["srccolumnname"].str.lower() == "end_date").any()
     del_cols = g.loc[g["is_deleted"].str.upper() == "Y", "srccolumnname"].tolist()
     del_col = del_cols[0] if del_cols else "NONE"
     filt_cols = g.loc[g["is_filter"].str.upper() == "Y", "srccolumnname"].tolist()
@@ -121,7 +140,9 @@ for keys, g in grouped:
     print(f"{slayer}.{srctablename} -> {tlayer}.{tgtable}")
     print(f"  PKs       : {pks}")
     print(f"  Mode      : {mode}")
-    print(f"  Lifecycle : from_date={'Y' if from_present else 'N'}, "
-          f"end_date={'Y' if end_present else 'N'}, delete_col={del_col}")
+    print(
+        f"  Lifecycle : from_date={'Y' if from_present else 'N'}, "
+        f"end_date={'Y' if end_present else 'N'}, delete_col={del_col}"
+    )
     print(f"  is_filter : {filt_col}")
     print("--------------------------------------------------")

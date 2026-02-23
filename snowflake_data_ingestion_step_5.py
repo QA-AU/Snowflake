@@ -12,16 +12,16 @@ from snowflake.snowpark import Session
 import pandas as pd
 
 # -------- Config --------
-VALIDATION_SCHEMA = "tgt_dw_val"                 # where SIM tables will live
-SIM_TABLE         = None                          # will default to f"{TGTTABLE}_SIM"
+VALIDATION_SCHEMA = "tgt_dw_val"  # where SIM tables will live
+SIM_TABLE = None  # will default to f"{TGTTABLE}_SIM"
 # Set to "Y" if you only want a TEMP VIEW (SIM_VIEW) and skip writing a table:
 SIM_AS_VIEW_ONLY = "N"
 
 # -------- Pre-reqs from Steps 2-4 --------
-assert 'session' in globals(), "ERROR: Snowflake session not found."
-for v in ("TLAYER","TGTTABLE","SLAYER","SRCTABLE"):
+assert "session" in globals(), "ERROR: Snowflake session not found."
+for v in ("TLAYER", "TGTTABLE", "SLAYER", "SRCTABLE"):
     assert v in globals(), f"ERROR: var {v} not set. Run Steps 2–3 first."
-for v in ("SRC_SLICE","TGT_SLICE","CLASSIFIED"):
+for v in ("SRC_SLICE", "TGT_SLICE", "CLASSIFIED"):
     cnt = session.sql(f"""
         SELECT COUNT(*) C FROM INFORMATION_SCHEMA.VIEWS
         WHERE UPPER(TABLE_SCHEMA)=CURRENT_SCHEMA() AND UPPER(TABLE_NAME)=UPPER('{v}')
@@ -53,12 +53,21 @@ MODE = "HISTORY" if m_hist[0] == "Y" else "SCD2"
 print(f"  Mode resolved: {MODE}")
 
 # Build mappings/sets
-pk_pairs = meta.loc[meta["IS_PK"]=="Y", ["SRC_COL","TGT_COL"]].drop_duplicates().values.tolist()
+pk_pairs = (
+    meta.loc[meta["IS_PK"] == "Y", ["SRC_COL", "TGT_COL"]]
+    .drop_duplicates()
+    .values.tolist()
+)
 if not pk_pairs:
     raise SystemExit("ERROR: No primary keys defined in meta.")
 pk_tgts = [p[1] for p in pk_pairs]
 
-tgt_cols_all = meta.loc[meta["IGNORE_ROW"]!="Y","TGT_COL"].str.upper().drop_duplicates().tolist()
+tgt_cols_all = (
+    meta.loc[meta["IGNORE_ROW"] != "Y", "TGT_COL"]
+    .str.upper()
+    .drop_duplicates()
+    .tolist()
+)
 if not tgt_cols_all:
     raise SystemExit("ERROR: No writable target columns (all ignored).")
 tgt_cols_csv = ", ".join([f'"{c}"' for c in tgt_cols_all])
@@ -71,8 +80,8 @@ tgt_physical_cols = set(session.sql(f"""
     AND UPPER(TABLE_NAME)=UPPER('{TGTTABLE}')
 """).to_pandas()["COL"].tolist())
 has_is_current = "IS_CURRENT" in tgt_physical_cols
-has_end_date   = "END_DATE"   in tgt_physical_cols
-has_from_date  = "FROM_DATE"  in tgt_physical_cols
+has_end_date = "END_DATE" in tgt_physical_cols
+has_from_date = "FROM_DATE" in tgt_physical_cols
 
 # Resolve "open" predicate (for current rows)
 open_pred = None
@@ -82,7 +91,9 @@ if MODE == "SCD2":
     elif has_end_date:
         open_pred = "END_DATE = DATE '9999-12-31'"
     else:
-        raise SystemExit("ERROR: SCD2 mode but target lacks IS_CURRENT/END_DATE to identify current rows.")
+        raise SystemExit(
+            "ERROR: SCD2 mode but target lacks IS_CURRENT/END_DATE to identify current rows."
+        )
 print(f"  Open predicate: {open_pred if open_pred else 'N/A (History)'}")
 
 # Map SRC -> TGT select list for inserts
@@ -101,7 +112,7 @@ mapped_select_sql = ", ".join(mapped_select)
 
 # Key list as CSV for joins
 pk_tgts_csv = ", ".join([f"{k}" for k in pk_tgts])
-pk_join_src_to_key = " AND ".join([f"s.{src} = k.{tgt}" for src,tgt in pk_pairs])
+pk_join_src_to_key = " AND ".join([f"s.{src} = k.{tgt}" for src, tgt in pk_pairs])
 
 # Default SIM table name
 if not SIM_TABLE:
@@ -111,7 +122,9 @@ if not SIM_TABLE:
 session.sql(f"CREATE SCHEMA IF NOT EXISTS {VALIDATION_SCHEMA}").collect()
 
 if MODE == "HISTORY":
-    print("Part B — HISTORY mode: building SIM as (actual target) UNION ALL (source batch mapped) ...")
+    print(
+        "Part B — HISTORY mode: building SIM as (actual target) UNION ALL (source batch mapped) ..."
+    )
 
     # Build HISTORY SIM as a view first
     hist_view_sql = f"""
@@ -124,18 +137,38 @@ if MODE == "HISTORY":
     session.sql(hist_view_sql).collect()
 
 else:
-    print("Part C — SCD2 mode: building SIM as closed(old current) + new versions + untouched rows ...")
+    print(
+        "Part C — SCD2 mode: building SIM as closed(old current) + new versions + untouched rows ..."
+    )
 
     # 1) Key sets from CLASSIFIED
-    session.sql("CREATE OR REPLACE TEMP VIEW KEY_NEW      AS SELECT " + pk_tgts_csv + " FROM CLASSIFIED WHERE CLASSIFICATION='NEW'").collect()
-    session.sql("CREATE OR REPLACE TEMP VIEW KEY_CHANGED  AS SELECT " + pk_tgts_csv + " FROM CLASSIFIED WHERE CLASSIFICATION='CHANGED'").collect()
-    session.sql("CREATE OR REPLACE TEMP VIEW KEY_DELETED  AS SELECT " + pk_tgts_csv + " FROM CLASSIFIED WHERE CLASSIFICATION='DELETED'").collect()
+    session.sql(
+        "CREATE OR REPLACE TEMP VIEW KEY_NEW      AS SELECT "
+        + pk_tgts_csv
+        + " FROM CLASSIFIED WHERE CLASSIFICATION='NEW'"
+    ).collect()
+    session.sql(
+        "CREATE OR REPLACE TEMP VIEW KEY_CHANGED  AS SELECT "
+        + pk_tgts_csv
+        + " FROM CLASSIFIED WHERE CLASSIFICATION='CHANGED'"
+    ).collect()
+    session.sql(
+        "CREATE OR REPLACE TEMP VIEW KEY_DELETED  AS SELECT "
+        + pk_tgts_csv
+        + " FROM CLASSIFIED WHERE CLASSIFICATION='DELETED'"
+    ).collect()
 
     # 2) Current rows impacted
-    impacted_pred = " OR ".join([
-        "EXISTS (SELECT 1 FROM KEY_CHANGED kc WHERE " + " AND ".join([f"kc.{k}=t.{k}" for k in pk_tgts]) + ")",
-        "EXISTS (SELECT 1 FROM KEY_DELETED kd WHERE " + " AND ".join([f"kd.{k}=t.{k}" for k in pk_tgts]) + ")"
-    ])
+    impacted_pred = " OR ".join(
+        [
+            "EXISTS (SELECT 1 FROM KEY_CHANGED kc WHERE "
+            + " AND ".join([f"kc.{k}=t.{k}" for k in pk_tgts])
+            + ")",
+            "EXISTS (SELECT 1 FROM KEY_DELETED kd WHERE "
+            + " AND ".join([f"kd.{k}=t.{k}" for k in pk_tgts])
+            + ")",
+        ]
+    )
     # 3) UNTOUCHED set = all rows except current impacted (keeps all prior history)
     untouched_sql = f"""
     CREATE OR REPLACE TEMP VIEW V_UNTOUCHED AS
@@ -148,7 +181,9 @@ else:
     session.sql(untouched_sql).collect()
 
     # 4) CLOSED versions for CHANGED/DELETED (modify current rows virtually)
-    close_changed_set = "DATEADD(DAY,-1, s.FROM_DATE)" if has_from_date else "CURRENT_DATE"
+    close_changed_set = (
+        "DATEADD(DAY,-1, s.FROM_DATE)" if has_from_date else "CURRENT_DATE"
+    )
     close_deleted_set = "s.END_DATE" if has_end_date else "CURRENT_DATE"
 
     close_changed_sql = f"""
@@ -225,7 +260,9 @@ print("Part D — Materialising SIM output ...")
 if SIM_AS_VIEW_ONLY.upper() == "Y":
     print("  SIM output kept as TEMP VIEW: SIM_VIEW")
 else:
-    session.sql(f'CREATE OR REPLACE TABLE {VALIDATION_SCHEMA}."{SIM_TABLE}" AS SELECT * FROM SIM_VIEW').collect()
+    session.sql(
+        f'CREATE OR REPLACE TABLE {VALIDATION_SCHEMA}."{SIM_TABLE}" AS SELECT * FROM SIM_VIEW'
+    ).collect()
     print(f'  SIM table created: {VALIDATION_SCHEMA}."{SIM_TABLE}"')
 
 # -------- Summary --------

@@ -8,29 +8,25 @@ session = get_active_session()
 # ===================== Configuration =========================================
 TABLE_META = {
     "debug_mode": "YES",  # "YES" prints debug info
-
     "source_system": "ERP",
     "source_db_name": "SALES_DB",
     "source_schema_name": "PUBLIC",
     "source_pk_columns": "ORDER_ID, LINE_NO",
     "source_join_clause": "LEFT JOIN LKP.CUST c ON c.id = o.cust_id",
     "source_filter_clause": "o.status = 'OPEN'",
-
     # date_filter uses a logical token "order_date" which will NOT be resolved
     # in generator or prepare_validation_sqls. It stays as a placeholder string
     # for later replacement in run_validation_sqls().
     # XX.START_DT and XX.END_DT are left as-is (to be resolved at execution time).
     "date_filter": "order_date between XX.START_DT and XX.END_DT",
     "date_filter_token": "order_date",
-
     # Target-side global filter (optional)
     "target_filter_clause": "status = 'OPEN'",
-
     # QA / mapping table location is metadata-driven
     # If qa_db_name is None, we fall back to source_db_name (or current DB).
-    "qa_db_name": None,                     # e.g. "SESAME" or None to use source_db_name/current DB
-    "qa_schema_name": "STG",                # default schema for QA table
-    "qa_table_name": "QA_TEMP_MAPPING_SQL"  # table name for generated mapping SQL
+    "qa_db_name": None,  # e.g. "SESAME" or None to use source_db_name/current DB
+    "qa_schema_name": "STG",  # default schema for QA table
+    "qa_table_name": "QA_TEMP_MAPPING_SQL",  # table name for generated mapping SQL
 }
 
 COLUMNS = [
@@ -45,7 +41,7 @@ COLUMNS = [
         "target_data_type": "STRING",
         "target_schema_name": "CORE",
         "target_table_name": "ORDERS",
-        "target_column_name": "cust_tier"
+        "target_column_name": "cust_tier",
     },
     {
         "source_table_name": "ORDERS",
@@ -58,7 +54,7 @@ COLUMNS = [
         "target_data_type": "DATE",
         "target_schema_name": "CORE",
         "target_table_name": "ORDERS",
-        "target_column_name": "order_date"
+        "target_column_name": "order_date",
     },
     {
         "source_table_name": "ORDERS",
@@ -71,10 +67,11 @@ COLUMNS = [
         "target_data_type": "NUMBER(18,2)",
         "target_schema_name": "CORE",
         "target_table_name": "ORDERS",
-        "target_column_name": "amount"
-    }
+        "target_column_name": "amount",
+    },
 ]
 # ============================================================================
+
 
 # ----------------------------- Helpers --------------------------------------
 def _is_null(x):
@@ -100,12 +97,16 @@ def _q_lit(v):
 
 
 def _split_csv(s):
-    return [p.strip() for p in s.split(",") if p and p.strip()] if s and not _is_null(s) else []
+    return (
+        [p.strip() for p in s.split(",") if p and p.strip()]
+        if s and not _is_null(s)
+        else []
+    )
 
 
 def _apply_alias_token(expr, alias, table):
     actual = (alias if alias and not _is_null(alias) else table) + "."
-    return re.sub(r'(?i)\balias\.', actual, expr)
+    return re.sub(r"(?i)\balias\.", actual, expr)
 
 
 def _combine_filters(*parts):
@@ -120,13 +121,31 @@ def _resolve_date_filter(meta):
 
 
 _ALIAS = {
-    "STRING": "STRING", "VARCHAR": "STRING", "CHAR": "STRING", "CHARACTER": "STRING",
-    "NCHAR": "STRING", "NVARCHAR": "STRING", "TEXT": "STRING",
-    "NUMBER": "NUMERIC", "DECIMAL": "NUMERIC", "NUMERIC": "NUMERIC",
-    "INT": "NUMERIC", "INTEGER": "NUMERIC", "BIGINT": "NUMERIC", "SMALLINT": "NUMERIC",
-    "TINYINT": "NUMERIC", "FLOAT": "NUMERIC", "DOUBLE": "NUMERIC", "REAL": "NUMERIC",
-    "BOOLEAN": "BOOL", "BOOL": "BOOL", "DATE": "DATE", "TIME": "TIME",
-    "TIMESTAMP": "TIMESTAMP_NTZ", "TIMESTAMP_LTZ": "TIMESTAMP_LTZ", "TIMESTAMP_TZ": "TIMESTAMP_TZ",
+    "STRING": "STRING",
+    "VARCHAR": "STRING",
+    "CHAR": "STRING",
+    "CHARACTER": "STRING",
+    "NCHAR": "STRING",
+    "NVARCHAR": "STRING",
+    "TEXT": "STRING",
+    "NUMBER": "NUMERIC",
+    "DECIMAL": "NUMERIC",
+    "NUMERIC": "NUMERIC",
+    "INT": "NUMERIC",
+    "INTEGER": "NUMERIC",
+    "BIGINT": "NUMERIC",
+    "SMALLINT": "NUMERIC",
+    "TINYINT": "NUMERIC",
+    "FLOAT": "NUMERIC",
+    "DOUBLE": "NUMERIC",
+    "REAL": "NUMERIC",
+    "BOOLEAN": "BOOL",
+    "BOOL": "BOOL",
+    "DATE": "DATE",
+    "TIME": "TIME",
+    "TIMESTAMP": "TIMESTAMP_NTZ",
+    "TIMESTAMP_LTZ": "TIMESTAMP_LTZ",
+    "TIMESTAMP_TZ": "TIMESTAMP_TZ",
 }
 _TYPE_RE = re.compile(r"^\s*([A-Z_]+)\s*(?:\(\s*(\d+)\s*(?:,\s*(\d+)\s*)?\))?\s*$")
 
@@ -196,7 +215,9 @@ def build_source_sql(meta, col):
     pks = _split_csv(meta["source_pk_columns"])
 
     tbl = col["source_table_name"]
-    alias = col.get("source_alias")        # used only inside expressions, not in SELECT output
+    alias = col.get(
+        "source_alias"
+    )  # used only inside expressions, not in SELECT output
     c = col["source_column_name"]
     override = col.get("source_column_override")
     lookup = col.get("source_lookup_sql")
@@ -279,7 +300,9 @@ def build_target_sql(meta, col):
     if debug:
         print(f"[DEBUG] target_fqn -> {fqn}")
 
-    select_clause = ", ".join([f"{pk} AS {pk}" for pk in pks] + [f"{out_name} AS {out_name}"])
+    select_clause = ", ".join(
+        [f"{pk} AS {pk}" for pk in pks] + [f"{out_name} AS {out_name}"]
+    )
     if debug:
         print(f"[DEBUG] select_clause (target) -> {select_clause}")
 
@@ -447,7 +470,11 @@ def run_validation_sqls(session: Session, table_fqn: str = "", order_date_value=
 
         counts_json_expr = (
             f"""PARSE_JSON('{{"SRC": {counts["SRC"]}, "TGT": {counts["TGT"]}}}')"""
-            if (counts["SRC"] is not None and counts["TGT"] is not None and count_err is None)
+            if (
+                counts["SRC"] is not None
+                and counts["TGT"] is not None
+                and count_err is None
+            )
             else "NULL"
         )
         diff_expr = "NULL" if diff_val is None else str(diff_val)
@@ -500,5 +527,5 @@ def main(session: Session, order_date_value=None):
 
 # ======================= RUN THIS CELL ======================================
 # Change '2024-06-30' to the desired order_date value
-result_df = main(session, '2024-06-30')
+result_df = main(session, "2024-06-30")
 result_df.show()
