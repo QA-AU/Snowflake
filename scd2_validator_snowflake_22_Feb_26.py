@@ -1,7 +1,7 @@
 """
 scd2_validator_snowflake.py
 ===========================
-SCD2 post-load validation tool — single file edition for Snowflake Python Worksheet.
+SCD2 post-load validation tool — Snowflake Python Worksheet edition.
 
 HOW TO USE:
   1. Fill in the CONFIG dict below (the only section you need to edit)
@@ -27,6 +27,12 @@ WHAT IT DOES:
   6. NO CHANGE — unchanged rows still active
   7. NO EXTRA rows written to target
 
+NULL KEY HANDLING:
+  PKs are not enforced — NULL is treated as a valid key value.
+  All key joins use EQUAL_NULL() so NULL = NULL resolves to TRUE.
+  Non-match detection uses _EXISTS_FLAG sentinel (not key IS NULL)
+  to avoid false INSERT/DELETE classification on NULL-key rows.
+
 RESULTS TABLE:
   Created automatically if it does not exist.
   Results for the same TARGET_TABLE + BUSINESS_DATE are replaced on each run.
@@ -37,7 +43,7 @@ RESULTS TABLE:
 # =============================================================================
 CONFIG = {
     "connection": {
-        "database": "your_database",  # database containing source and target
+        "database":  "your_database",   # database containing source and target
         "warehouse": "your_warehouse",  # warehouse to use for the run
     },
     "run": {
@@ -45,29 +51,34 @@ CONFIG = {
     },
     "source": {
         "schema": "SRC_SCHEMA",
-        "table": "SRC_TABLE",
+        "table":  "SRC_TABLE",
     },
     "target": {
         "schema": "TGT_SCHEMA",
-        "table": "TGT_TABLE",
+        "table":  "TGT_TABLE",
         # SCD2 control column names — change only if your table uses different names
+        # Defaults: STRT_DT, END_DT, DELETED_FLAG
         "scd2_columns": {
-            "strt_dt": "STRT_DT",
-            "end_dt": "END_DT",
+            "strt_dt":      "STRT_DT",
+            "end_dt":       "END_DT",
             "deleted_flag": "DELETED_FLAG",
         },
     },
-    # Natural / composite key columns
+    # Natural / composite key columns.
+    # NULL is treated as a valid key value — no PK enforcement assumed.
     "keys": ["KEY_COL1", "KEY_COL2"],
-    # Columns to hash for change detection
+    # Columns to hash for change detection.
+    # MUST contain at least one column — empty list disables UPDATE detection.
     # Exclude: key cols, audit cols, SCD2 control cols (STRT_DT, END_DT, etc.)
+    # MUST match exactly the columns your ETL pipeline hashes — mismatches
+    # cause false FAIL on Check 7 (unexpected rows) or false PASS on Check 2.
     "payload_columns": ["COL_A", "COL_B", "COL_C"],
-    # Audit columns — listed here for documentation only (not used in hashing)
-    # No RECORD_HASH or SK columns are required in source or target
+    # Audit columns — listed here for documentation only (not used in hashing).
+    # No RECORD_HASH or SK columns are required in source or target.
     "audit_columns": ["CREATED_AT", "UPDATED_AT", "BATCH_ID"],
     "results": {
         "schema": "AUDIT_SCHEMA",
-        "table": "SCD2_VALIDATION_RESULTS",
+        "table":  "SCD2_VALIDATION_RESULTS",
     },
 }
 # =============================================================================
@@ -95,13 +106,8 @@ def validate_config(cfg: dict):
     errors = []
 
     for section in (
-        "connection",
-        "run",
-        "source",
-        "target",
-        "keys",
-        "payload_columns",
-        "results",
+        "connection", "run", "source", "target",
+        "keys", "payload_columns", "results",
     ):
         if section not in cfg:
             errors.append(f"Missing required section: '{section}'")
@@ -128,7 +134,10 @@ def validate_config(cfg: dict):
         errors.append("keys must contain at least one column name")
 
     if "payload_columns" in cfg and not cfg["payload_columns"]:
-        errors.append("payload_columns must contain at least one column name")
+        errors.append(
+            "payload_columns must contain at least one column name — "
+            "empty list disables UPDATE detection entirely"
+        )
 
     if "results" in cfg:
         for field in ("schema", "table"):
@@ -142,8 +151,8 @@ def validate_config(cfg: dict):
 
     # Apply SCD2 column name defaults
     scd2_defaults = {
-        "strt_dt": "STRT_DT",
-        "end_dt": "END_DT",
+        "strt_dt":      "STRT_DT",
+        "end_dt":       "END_DT",
         "deleted_flag": "DELETED_FLAG",
     }
     user_scd2 = cfg["target"].get("scd2_columns", {})
@@ -159,41 +168,50 @@ def validate_config(cfg: dict):
 # SQL BUILDER
 # =============================================================================
 class SCD2SqlBuilder:
-    """Builds all validation SQL from config. No hardcoded column names."""
+    """
+    Builds all validation SQL from config.
+    No hardcoded column names — everything driven by CONFIG.
+
+    NULL KEY FIXES applied throughout:
+      - _key_join()     uses EQUAL_NULL() instead of = (Change 1)
+      - tmp_tgt_prev()  NOT EXISTS uses EQUAL_NULL, adds _EXISTS_FLAG (Change 2)
+      - tmp_src()       adds _EXISTS_FLAG sentinel (Change 2b)
+      - tmp_classified() uses _EXISTS_FLAG IS NULL for non-match detection (Change 3)
+    """
 
     def __init__(self, cfg: dict):
         self.cfg = cfg
-        self.db = cfg["connection"]["database"]
+        self.db            = cfg["connection"]["database"]
         self.business_date = cfg["run"]["business_date"]
 
         self.src_schema = cfg["source"]["schema"]
-        self.src_table = cfg["source"]["table"]
-        self.src_fqn = f"{self.db}.{self.src_schema}.{self.src_table}"
+        self.src_table  = cfg["source"]["table"]
+        self.src_fqn    = f"{self.db}.{self.src_schema}.{self.src_table}"
 
         self.tgt_schema = cfg["target"]["schema"]
-        self.tgt_table = cfg["target"]["table"]
-        self.tgt_fqn = f"{self.db}.{self.tgt_schema}.{self.tgt_table}"
+        self.tgt_table  = cfg["target"]["table"]
+        self.tgt_fqn    = f"{self.db}.{self.tgt_schema}.{self.tgt_table}"
 
         scd2 = cfg["target"]["scd2_columns"]
-        self.strt_dt = scd2["strt_dt"]
-        self.end_dt = scd2["end_dt"]
+        self.strt_dt      = scd2["strt_dt"]
+        self.end_dt       = scd2["end_dt"]
         self.deleted_flag = scd2["deleted_flag"]
 
-        self.keys = cfg["keys"]
+        self.keys            = cfg["keys"]
         self.payload_columns = cfg["payload_columns"]
-        self.audit_columns = cfg.get("audit_columns", [])
+        self.audit_columns   = cfg.get("audit_columns", [])
 
         self.res_schema = cfg["results"]["schema"]
-        self.res_table = cfg["results"]["table"]
-        self.res_fqn = f"{self.db}.{self.res_schema}.{self.res_table}"
+        self.res_table  = cfg["results"]["table"]
+        self.res_fqn    = f"{self.db}.{self.res_schema}.{self.res_table}"
 
         self._key_cols_raw = ", ".join(self.keys)
         self._payload_cols = ", ".join(self.payload_columns)
 
     def _hash_expr(self, table_alias: str = None) -> str:
-        """SHA2 hash expression over payload columns, optionally qualified by alias."""
+        """SHA2-256 hash over payload columns. COALESCE ensures null safety."""
         prefix = f"{table_alias}." if table_alias else ""
-        parts = [
+        parts  = [
             f"COALESCE(CAST({prefix}{col} AS VARCHAR), '')"
             for col in self.payload_columns
         ]
@@ -201,32 +219,53 @@ class SCD2SqlBuilder:
         return f"SHA2(CONCAT_WS('||',\n        {inner}\n    ), 256)"
 
     def _key_join(self, left: str, right: str) -> str:
-        """ON clause joining two aliases on all key columns."""
-        return "\n    AND ".join(f"{left}.{k} = {right}.{k}" for k in self.keys)
+        """
+        NULL-safe key join using EQUAL_NULL().
+        Standard = returns NULL (not TRUE) for NULL = NULL, which breaks all
+        join-based classification when PKs are not enforced and NULL is a
+        valid key value. EQUAL_NULL(NULL, NULL) returns TRUE.
+        """
+        return "\n    AND ".join(
+            f"EQUAL_NULL({left}.{k}, {right}.{k})" for k in self.keys
+        )
 
     def _col_list(self, alias: str, cols: list) -> str:
         return ",\n    ".join(f"{alias}.{c}" for c in cols)
 
     # -------------------------------------------------------------------------
     def tmp_src(self) -> str:
+        """
+        Snapshot of source rows active on business_date.
+        Includes _EXISTS_FLAG = 'Y' sentinel for NULL-safe non-match detection.
+        """
         key_cols = "\n    ".join(f"{c}," for c in self.keys)
-        payload = "\n    ".join(f"{c}," for c in self.payload_columns)
+        payload  = "\n    ".join(f"{c}," for c in self.payload_columns)
         return f"""
 CREATE OR REPLACE TEMPORARY TABLE TMP_SRC AS
 SELECT
     {key_cols}
     {payload}
     {self._hash_expr()} AS _RECORD_HASH,
-    '{self.business_date}'::DATE AS {self.strt_dt}
+    '{self.business_date}'::DATE AS {self.strt_dt},
+    'Y' AS _EXISTS_FLAG
 FROM {self.src_fqn}
 WHERE '{self.business_date}'::DATE BETWEEN {self.strt_dt} AND {self.end_dt}
   AND {self.deleted_flag} = FALSE;
 """.strip()
 
     def tmp_tgt_prev(self) -> str:
-        key_cols = "\n    ".join(f"T.{c}," for c in self.keys)
-        payload = "\n    ".join(f"T.{c}," for c in self.payload_columns)
-        key_null_chk = " AND ".join(f"T2.{k} = T.{k}" for k in self.keys)
+        """
+        Snapshot of target rows active on business_date - 1 (previous day).
+        Excludes keys that already carry an active delete marker from a prior
+        run — prevents re-arriving records being misclassified as UPDATE.
+        Includes _EXISTS_FLAG = 'Y' sentinel for NULL-safe non-match detection.
+        NOT EXISTS uses EQUAL_NULL — its own inline join, not routed via _key_join.
+        """
+        key_cols     = "\n    ".join(f"T.{c}," for c in self.keys)
+        payload      = "\n    ".join(f"T.{c}," for c in self.payload_columns)
+        key_null_chk = " AND ".join(
+            f"EQUAL_NULL(T2.{k}, T.{k})" for k in self.keys
+        )
         return f"""
 CREATE OR REPLACE TEMPORARY TABLE TMP_TGT_PREV AS
 SELECT
@@ -234,16 +273,13 @@ SELECT
     {payload}
     {self._hash_expr('T')} AS _RECORD_HASH,
     T.{self.strt_dt},
-    T.{self.end_dt}
+    T.{self.end_dt},
+    'Y' AS _EXISTS_FLAG
 FROM {self.tgt_fqn} T
 WHERE DATEADD(DAY, -1, '{self.business_date}'::DATE)
       BETWEEN T.{self.strt_dt} AND T.{self.end_dt}
   AND T.{self.deleted_flag} = FALSE
   AND NOT EXISTS (
-      -- Exclude keys already carrying an active delete marker from a prior run.
-      -- Without this, a record deleted on D-1 (expired row END_DT = D-1) would
-      -- slip into TMP_TGT_PREV and be misclassified as UPDATE instead of INSERT
-      -- when it re-arrives in source today.
       SELECT 1
       FROM {self.tgt_fqn} T2
       WHERE {key_null_chk}
@@ -253,12 +289,21 @@ WHERE DATEADD(DAY, -1, '{self.business_date}'::DATE)
 """.strip()
 
     def tmp_classified(self) -> str:
-        key_s = "\n    ".join(f"S.{c}," for c in self.keys)
-        key_t = "\n    ".join(f"T.{c}," for c in self.keys)
-        pay_s = "\n    ".join(f"S.{c}," for c in self.payload_columns)
-        pay_t = "\n    ".join(f"T.{c}," for c in self.payload_columns)
+        """
+        Classifies every key as INSERT / UPDATE / DELETE by comparing
+        TMP_SRC against TMP_TGT_PREV.
+
+        Non-match detection uses _EXISTS_FLAG IS NULL (not key IS NULL).
+        When a key is NULL and a LEFT JOIN finds no match, the key column
+        is NULL in both the source row AND the unmatched join result —
+        making key IS NULL ambiguous. _EXISTS_FLAG is a non-nullable literal
+        'Y' that is only NULL when the join found no matching row.
+        """
+        key_s   = "\n    ".join(f"S.{c}," for c in self.keys)
+        key_t   = "\n    ".join(f"T.{c}," for c in self.keys)
+        pay_s   = "\n    ".join(f"S.{c}," for c in self.payload_columns)
+        pay_t   = "\n    ".join(f"T.{c}," for c in self.payload_columns)
         join_st = self._key_join("S", "T")
-        null_k = self.keys[0]
         return f"""
 CREATE OR REPLACE TEMPORARY TABLE TMP_CLASSIFIED AS
 
@@ -271,7 +316,7 @@ SELECT
     'INSERT' AS CHANGE_TYPE
 FROM TMP_SRC S
 LEFT JOIN TMP_TGT_PREV T ON {join_st}
-WHERE T.{null_k} IS NULL
+WHERE T._EXISTS_FLAG IS NULL
 
 UNION ALL
 
@@ -297,14 +342,14 @@ SELECT
     'DELETE' AS CHANGE_TYPE
 FROM TMP_TGT_PREV T
 LEFT JOIN TMP_SRC S ON {self._key_join('T', 'S')}
-WHERE S.{null_k} IS NULL;
+WHERE S._EXISTS_FLAG IS NULL;
 """.strip()
 
     def tmp_expected(self) -> str:
-        key_t = "\n    ".join(f"T.{c}," for c in self.keys)
-        pay_t = "\n    ".join(f"T.{c}," for c in self.payload_columns)
-        key_c = "\n    ".join(f"C.{c}," for c in self.keys)
-        pay_c = "\n    ".join(f"C.{c}," for c in self.payload_columns)
+        key_t   = "\n    ".join(f"T.{c}," for c in self.keys)
+        pay_t   = "\n    ".join(f"T.{c}," for c in self.payload_columns)
+        key_c   = "\n    ".join(f"C.{c}," for c in self.keys)
+        pay_c   = "\n    ".join(f"C.{c}," for c in self.payload_columns)
         join_ts = self._key_join("T", "S")
         return f"""
 CREATE OR REPLACE TEMPORARY TABLE TMP_EXPECTED AS
@@ -404,7 +449,7 @@ FROM (
 """.strip()
 
     def check_expiry(self) -> str:
-        key_c = self._col_list("C", self.keys)
+        key_c   = self._col_list("C", self.keys)
         join_ct = self._key_join("T", "C")
         return f"""
 CREATE OR REPLACE TEMPORARY TABLE TMP_EXPIRY_ISSUES AS
@@ -426,12 +471,12 @@ WHERE C.CHANGE_TYPE IN ('UPDATE', 'DELETE')
     def summary_query(self) -> str:
         return f"""
 SELECT
-    '{self.tgt_fqn}'      AS TARGET_TABLE,
+    '{self.tgt_fqn}'           AS TARGET_TABLE,
     '{self.business_date}'::DATE AS BUSINESS_DATE,
     CHECK_TYPE,
     DISCREPANCY_COUNT,
     STATUS,
-    CURRENT_TIMESTAMP()   AS VALIDATED_AT
+    CURRENT_TIMESTAMP()        AS VALIDATED_AT
 FROM (
     SELECT '1: INSERT  - new active row written'             AS CHECK_TYPE,
            COUNT(*) AS DISCREPANCY_COUNT,
@@ -485,10 +530,7 @@ WHERE TARGET_TABLE  = '{self.tgt_fqn}'
 """.strip()
 
     def insert_results(self) -> str:
-        return f"""
-INSERT INTO {self.res_fqn}
-{self.summary_query()}
-""".strip()
+        return f"INSERT INTO {self.res_fqn}\n{self.summary_query()}"
 
 
 # =============================================================================
@@ -497,25 +539,22 @@ INSERT INTO {self.res_fqn}
 class SCD2Validator:
 
     def __init__(self, cfg: dict, session=None):
-        self.cfg = validate_config(cfg)
+        self.cfg     = validate_config(cfg)
         self.builder = SCD2SqlBuilder(self.cfg)
         self.session = session  # injected by Snowflake worksheet runtime
-        self.conn = None
-        self.cur = None
+        self.conn    = None
+        self.cur     = None
 
     def _connect(self):
-        # Use the session passed in by Snowflake worksheet runtime (main(session))
-        # Fall back to get_active_session() if called outside a worksheet
         if self.session is not None:
             session = self.session
         else:
             from snowflake.snowpark.context import get_active_session
-
             session = get_active_session()
         c = self.cfg["connection"]
         log.info("Using active Snowflake session (Python Worksheet)")
         self.conn = session.connection
-        self.cur = self.conn.cursor()
+        self.cur  = self.conn.cursor()
         self.cur.execute(f"USE DATABASE {c['database']}")
         self.cur.execute(f"USE WAREHOUSE {c['warehouse']}")
         log.info(f"  Database  : {c['database']}")
@@ -536,15 +575,15 @@ class SCD2Validator:
             self._connect()
 
             # Build temp tables
-            self._run("STEP 1 — TMP_SRC", b.tmp_src())
-            self._run("STEP 2 — TMP_TGT_PREV", b.tmp_tgt_prev())
-            self._run("STEP 3 — TMP_CLASSIFIED", b.tmp_classified())
-            self._run("STEP 4 — TMP_EXPECTED", b.tmp_expected())
+            self._run("STEP 1 — TMP_SRC",        b.tmp_src())
+            self._run("STEP 2 — TMP_TGT_PREV",   b.tmp_tgt_prev())
+            self._run("STEP 3 — TMP_CLASSIFIED",  b.tmp_classified())
+            self._run("STEP 4 — TMP_EXPECTED",    b.tmp_expected())
 
             # Run checks
-            self._run("CHECK A — TMP_MISSING", b.check_missing())
-            self._run("CHECK B — TMP_EXTRA", b.check_extra())
-            self._run("CHECK C — TMP_EXPIRY_ISSUES", b.check_expiry())
+            self._run("CHECK A — TMP_MISSING",       b.check_missing())
+            self._run("CHECK B — TMP_EXTRA",          b.check_extra())
+            self._run("CHECK C — TMP_EXPIRY_ISSUES",  b.check_expiry())
 
             # Fetch and display results
             rows = self._fetch(b.summary_query())
@@ -554,41 +593,32 @@ class SCD2Validator:
             print("SCD2 VALIDATION RESULTS")
             print(f"  Target        : {b.tgt_fqn}")
             print(f"  Business Date : {b.business_date}")
-            print(
-                f"  Validated At  : {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')} UTC"
-            )
+            print(f"  Validated At  : {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')} UTC")
             print("=" * 75)
             print(f"  {'CHECK':<45}  {'DISCREPANCIES':>13}  STATUS")
             print("-" * 75)
             all_pass = True
             for _, _, check_type, disc_count, status, _ in rows:
-                marker = "PASS" if status == "PASS" else "FAIL"
                 flag = "  " if status == "PASS" else ">>"
-                print(f"  {flag}  {check_type:<43}  {disc_count:>13}  {marker}")
+                print(f"  {flag}  {check_type:<43}  {disc_count:>13}  {status}")
                 if status != "PASS":
                     all_pass = False
             print("=" * 75)
-            print(
-                f"  OVERALL: {'ALL CHECKS PASSED' if all_pass else 'SOME CHECKS FAILED -- see detail tables below'}"
-            )
+            print(f"  OVERALL: {'ALL CHECKS PASSED' if all_pass else 'SOME CHECKS FAILED -- see detail tables below'}")
             print("=" * 75)
 
             if not all_pass:
                 print()
-                print(
-                    "  DRILL-DOWN: run these queries in a SQL worksheet to see failing rows:"
-                )
-                print(f"    SELECT * FROM TMP_MISSING ORDER BY EXPECTED_TYPE;")
-                print(f"    SELECT * FROM TMP_EXTRA;")
-                print(f"    SELECT * FROM TMP_EXPIRY_ISSUES;")
+                print("  DRILL-DOWN: run these queries in a SQL worksheet to see failing rows:")
+                print("    SELECT * FROM TMP_MISSING ORDER BY EXPECTED_TYPE;")
+                print("    SELECT * FROM TMP_EXTRA;")
+                print("    SELECT * FROM TMP_EXPIRY_ISSUES;")
 
             print()
 
             # Write results to Snowflake
             self._run("Create results table if not exists", b.create_results_table())
-            n = self._run(
-                "Delete prior results (OVERWRITE)", b.delete_existing_results()
-            )
+            n = self._run("Delete prior results (OVERWRITE)", b.delete_existing_results())
             log.info(f"    {n} prior result row(s) removed")
             self._run("Insert new results", b.insert_results())
             log.info(f"Results written to: {b.res_fqn}")
