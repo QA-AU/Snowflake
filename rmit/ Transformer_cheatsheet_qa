@@ -1,0 +1,291 @@
+# =============================================================================
+# PYTORCH TRANSFORMER — CHEAT SHEET
+# data loading · tokeniser · dataset · architecture · training · validation
+# =============================================================================
+
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+from pathlib import Path
+from torch.utils.data import Dataset, DataLoader, RandomSampler
+
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+
+# =============================================================================
+# 1. TOKENISER
+# =============================================================================
+# char-level: every unique character gets an integer ID
+
+class CharTokenizer:
+    def __init__(self, vocab):
+        self.c2i = {c: i for i, c in enumerate(vocab)}
+        self.i2c = {i: c for i, c in enumerate(vocab)}
+
+    @classmethod
+    def train_from_text(cls, text):
+        return cls(sorted(set(text)))               # build vocab from raw text
+
+    def encode(self, text):
+        return [self.c2i[c] for c in text]          # str  -> list[int]
+
+    def decode(self, ids):
+        return "".join([self.i2c[int(i)] for i in ids])  # list[int] -> str
+
+    def vocabulary_size(self):
+        return len(self.c2i)
+
+text      = Path("data/tiny-shakespeare.txt").read_text()
+tokenizer = CharTokenizer.train_from_text(text)     # vocab_size ≈ 65
+
+
+# =============================================================================
+# 2. CONFIG
+# =============================================================================
+
+cfg = {
+    "vocabulary_size": tokenizer.vocabulary_size(), # V  — output logits size
+    "context_size":    256,                         # T  — max sequence length
+    "d_embed":         768,                         # D  — embedding dimension
+    "heads_num":        12,                         # number of attention heads
+    "layers_num":       10,                         # transformer blocks stacked
+    "dropout_rate":    0.1,
+    "use_bias":        False,
+}
+cfg["head_size"] = cfg["d_embed"] // cfg["heads_num"]   # H = 64 per head
+
+
+# =============================================================================
+# 3. DATASET & DATALOADER
+# =============================================================================
+# x = tokens[i : i+T]        — input window
+# y = tokens[i+1 : i+1+T]    — target (shifted by 1 = "predict next token")
+
+BATCH = 64
+ITERS = 500
+SPLIT = 0.9
+
+tokens        = torch.tensor(tokenizer.encode(text)).to(device)
+n             = int(SPLIT * len(tokens))
+train_tok     = tokens[:n]
+val_tok       = tokens[n:]
+
+class TokenIdsDataset(Dataset):
+    def __init__(self, data, block):
+        self.data, self.block = data, block
+
+    def __len__(self):
+        return len(self.data) - self.block
+
+    def __getitem__(self, i):
+        x = self.data[i     : i +     self.block]
+        y = self.data[i + 1 : i + 1 + self.block]
+        return x, y
+
+train_ds = TokenIdsDataset(train_tok, cfg["context_size"])
+val_ds   = TokenIdsDataset(val_tok,   cfg["context_size"])
+
+# RandomSampler lets us control exact number of samples per epoch
+train_dl = DataLoader(train_ds, batch_size=BATCH,
+    sampler=RandomSampler(train_ds, num_samples=BATCH * ITERS, replacement=True))
+val_dl   = DataLoader(val_ds, batch_size=BATCH,
+    sampler=RandomSampler(val_ds, replacement=True))
+
+
+# =============================================================================
+# 4. ARCHITECTURE
+# =============================================================================
+
+class AttentionHead(nn.Module):
+    """Single attention head. Output shape: (B, T, H)"""
+    def __init__(self, cfg):
+        super().__init__()
+        d, h, b = cfg["d_embed"], cfg["head_size"], cfg["use_bias"]
+        self.Q    = nn.Linear(d, h, b)
+        self.K    = nn.Linear(d, h, b)
+        self.V    = nn.Linear(d, h, b)
+        self.drop = nn.Dropout(cfg["dropout_rate"])
+        # causal mask: token i can only attend to tokens 0..i (no future leakage)
+        mask = torch.tril(torch.ones(cfg["context_size"], cfg["context_size"]))
+        self.register_buffer("mask", mask)          # saved with model, not a param
+
+    def forward(self, x):
+        B, T, _ = x.shape
+        Q, K, V = self.Q(x), self.K(x), self.V(x)             # compute once each
+        s = Q @ K.transpose(1, 2)                               # (B, T, T)
+        s = s.masked_fill(self.mask[:T, :T] == 0, -torch.inf)  # mask future
+        s = torch.softmax(s / K.shape[-1] ** 0.5, -1)          # scale by sqrt(H)
+        return self.drop(s) @ V                                 # (B, T, H)
+
+
+class MultiHeadAttention(nn.Module):
+    """N heads in parallel, concat outputs, project back to D."""
+    def __init__(self, cfg):
+        super().__init__()
+        self.heads = nn.ModuleList([AttentionHead(cfg) for _ in range(cfg["heads_num"])])
+        self.proj  = nn.Linear(cfg["d_embed"], cfg["d_embed"])
+        self.drop  = nn.Dropout(cfg["dropout_rate"])
+
+    def forward(self, x):
+        out = torch.cat([h(x) for h in self.heads], dim=-1)    # (B, T, D)
+        return self.drop(self.proj(out))
+
+
+class FeedForward(nn.Module):
+    """Per-token MLP. Hidden size = 4×D. GELU activation."""
+    def __init__(self, cfg):
+        super().__init__()
+        d = cfg["d_embed"]
+        self.net = nn.Sequential(
+            nn.Linear(d, d * 4),
+            nn.GELU(),                                          # smoother than ReLU
+            nn.Linear(d * 4, d),
+            nn.Dropout(cfg["dropout_rate"]),
+        )
+
+    def forward(self, x):
+        return self.net(x)
+
+
+class Block(nn.Module):
+    """One transformer layer: pre-norm, MHA + residual, FFN + residual."""
+    def __init__(self, cfg):
+        super().__init__()
+        d        = cfg["d_embed"]
+        self.mha = MultiHeadAttention(cfg)
+        self.ff  = FeedForward(cfg)
+        self.ln1 = nn.LayerNorm(d)                             # norm BEFORE sublayer
+        self.ln2 = nn.LayerNorm(d)
+
+    def forward(self, x):
+        x = x + self.mha(self.ln1(x))                         # residual keeps gradients flowing
+        x = x + self.ff(self.ln2(x))
+        return x
+
+
+class DemoGPT(nn.Module):
+    """
+    Full model.
+    token_ids (B,T) -> logits (B,T,V)
+
+    Shapes at each stage:
+      token_ids        (B, T)
+      tok + pos embed  (B, T, D)
+      after N blocks   (B, T, D)
+      logits output    (B, T, V)
+    """
+    def __init__(self, cfg):
+        super().__init__()
+        V, C, D      = cfg["vocabulary_size"], cfg["context_size"], cfg["d_embed"]
+        self.tok_emb = nn.Embedding(V, D)
+        self.pos_emb = nn.Embedding(C, D)                      # learned position vectors
+        self.blocks  = nn.Sequential(*[Block(cfg) for _ in range(cfg["layers_num"])])
+        self.norm    = nn.LayerNorm(D)
+        self.head    = nn.Linear(D, V, bias=False)             # unembed -> vocab logits
+
+    def forward(self, ids):
+        T = ids.shape[1]
+        x = self.tok_emb(ids) + self.pos_emb(torch.arange(T, device=device))
+        return self.head(self.norm(self.blocks(x)))            # (B, T, V)
+
+model = DemoGPT(cfg).to(device)
+
+
+# =============================================================================
+# 5. VALIDATION
+# =============================================================================
+# @no_grad  — no autograd graph built (faster, less memory)
+# model.eval() — disables dropout for a clean unbiased estimate
+
+@torch.no_grad()
+def calc_val_loss(model, n_batches=10):
+    model.eval()
+    total = 0.0
+    it    = iter(val_dl)
+    for _ in range(n_batches):
+        x, y    = next(it)
+        logits  = model(x)                                     # (B, T, V)
+        B, T, V = logits.shape
+        # cross_entropy expects (N, C) logits and (N,) targets -> flatten first
+        total  += F.cross_entropy(logits.view(B * T, V), y.view(B * T)).item()
+    model.train()                                              # restore training mode
+    return total / n_batches
+
+
+# =============================================================================
+# 6. TRAINING LOOP
+# =============================================================================
+# AdamW = Adam + decoupled weight decay (standard for transformers)
+
+optimizer    = torch.optim.AdamW(model.parameters(), lr=4e-4)
+EVAL_EVERY   = 10
+
+train_losses, val_losses = [], []
+
+for step, (x, y) in enumerate(train_dl):
+    model.train()
+
+    logits  = model(x)                                         # forward  (B, T, V)
+    B, T, V = logits.shape
+    loss    = F.cross_entropy(logits.view(B * T, V), y.view(B * T))
+
+    loss.backward()                                            # backward
+    optimizer.step()
+    optimizer.zero_grad(set_to_none=True)                      # set_to_none=True saves memory
+
+    train_losses.append(loss.item())
+
+    if step % EVAL_EVERY == 0:
+        val_loss = calc_val_loss(model, n_batches=10)
+        val_losses.append(val_loss)
+        print(f"step {step:>4}  train={loss.item():.3f}  val={val_loss:.3f}")
+
+        # overfitting signal: val_loss keeps rising while train_loss falls
+
+
+# =============================================================================
+# 7. GENERATION  (bonus)
+# =============================================================================
+
+@torch.no_grad()
+def generate(model, prompt, max_tokens=200):
+    model.eval()
+    ids = torch.tensor(tokenizer.encode(prompt)).unsqueeze(0).to(device)
+    for _ in range(max_tokens):
+        if ids.shape[1] >= cfg["context_size"]:
+            break
+        probs = F.softmax(model(ids)[:, -1, :], dim=-1)       # last token only
+        nxt   = torch.multinomial(probs, num_samples=1)        # sample from distribution
+        ids   = torch.cat([ids, nxt], dim=-1)
+    return tokenizer.decode(ids[0])
+
+print(generate(model, "First Citizen:\n"))
+
+
+# =============================================================================
+# QUICK REFERENCE
+# =============================================================================
+#
+# Tensor shapes
+# ─────────────────────────────────────────────────────
+#  token_ids input      (B, T)
+#  after embedding      (B, T, D)
+#  attn scores  Q@K     (B, T, T)
+#  single head output   (B, T, H)       H = D / heads_num
+#  after concat heads   (B, T, D)       H * heads_num = D
+#  final logits         (B, T, V)
+#  logits_flat          (B*T, V)        needed for cross_entropy
+#  targets_flat         (B*T,)          needed for cross_entropy
+#
+# Key concepts
+# ─────────────────────────────────────────────────────
+#  causal mask          tril matrix — no future token leakage
+#  scale 1/sqrt(d_k)   prevents dot-products from exploding (vanishing softmax grads)
+#  residual x=x+f(x)   stable gradient flow through deep networks
+#  pre-LayerNorm        norm BEFORE sublayer — more stable than original paper
+#  GELU                 smooth activation, standard in GPT-style models
+#  model.train()        enables dropout
+#  model.eval()         disables dropout
+#  @no_grad()           no autograd graph — faster inference / validation
+#  set_to_none=True     faster + less memory than zeroing gradients
+#  val_loss > train     normal; val_loss rising while train falls = overfitting
