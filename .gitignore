@@ -4,3 +4,4 @@ pytorch-project/pytorch_env/*
 __pycache__/
 *.pyc
 .ipynb_checkpoints/
+rmit/cd0281-Introduction-to-Neural-Networks-with-PyTorch
